@@ -35,10 +35,15 @@ class NotificationReceiver : BroadcastReceiver() {
         private fun getPlanes(): String {
             val client = OkHttpClient()
 
+            val bl_lat = "bottom left latitude"
+            val bl_lng = "bottom left longitude"
+            val tr_lat = "top right latitude"
+            val tr_lng = "top right longitude"
+            
             val request = Request.Builder()
-                .url("https://flight-radar1.p.rapidapi.com/flights/list-in-boundary?bl_lat=13.607884&bl_lng=100.641975&tr_lat=13.771029&tr_lng=100.861566&limit=300")
+                .url("https://flight-radar1.p.rapidapi.com/flights/list-in-boundary?bl_lat=${bl_lat}&bl_lng=${bl_lng}&tr_lat=${tr_lat}&tr_lng=${tr_lng}&limit=300")
                 .get()
-                .addHeader("x-rapidapi-key", "e28bedd27emshc9e5a17c08b8a2fp14b25djsn7f83bb280012")
+                .addHeader("x-rapidapi-key", "Rapid API Key")
                 .addHeader("x-rapidapi-host", "flight-radar1.p.rapidapi.com")
                 .build()
 
