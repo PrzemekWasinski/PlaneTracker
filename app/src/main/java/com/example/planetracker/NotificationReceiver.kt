@@ -5,17 +5,26 @@ import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.icu.text.SimpleDateFormat
 import androidx.core.app.NotificationCompat
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.IOException
 import android.os.AsyncTask
+import java.util.Date
 
 class NotificationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         // Call AsyncTask to fetch the plane data and show the notification
         FetchPlanesTask(context).execute()
+        val updateIntent = Intent("com.example.planetracker.UPDATE_VIEW") // Custom action
+        val sdf = SimpleDateFormat("HH:mm:ss")
+        val currentTime = sdf.format(Date())
+
+        updateIntent.putExtra("update_text", "Last Updated: ${currentTime}")
+        updateIntent.flags = Intent.FLAG_RECEIVER_FOREGROUND // Restrict to your app
+        context?.sendBroadcast(updateIntent)
     }
 
     // AsyncTask to perform network operations off the main thread
@@ -35,19 +44,14 @@ class NotificationReceiver : BroadcastReceiver() {
         private fun getPlanes(): String {
             val client = OkHttpClient()
 
-            val bl_lat = "bottom left latitude"
-            val bl_lng = "bottom left longitude"
-            val tr_lat = "top right latitude"
-            val tr_lng = "top right longitude"
-            
             val request = Request.Builder()
-                .url("https://flight-radar1.p.rapidapi.com/flights/list-in-boundary?bl_lat=${bl_lat}&bl_lng=${bl_lng}&tr_lat=${tr_lat}&tr_lng=${tr_lng}&limit=300")
+                .url("https://flight-radar1.p.rapidapi.com/flights/list-in-boundary?bl_lat=51.636985&bl_lng=-0.034332&tr_lat=51.725474&tr_lng=0.211487&limit=300")
                 .get()
-                .addHeader("x-rapidapi-key", "Rapid API Key")
+                .addHeader("x-rapidapi-key", "apikey")
                 .addHeader("x-rapidapi-host", "flight-radar1.p.rapidapi.com")
                 .build()
 
-            return try {
+            try {
                 val response = client.newCall(request).execute()
 
                 // Read response content with peekBody
@@ -70,11 +74,12 @@ class NotificationReceiver : BroadcastReceiver() {
                     planeList.add(planeInfo)
                 }
 
-                planeList.joinToString(" ")
+                return planeList.joinToString(" ")
             } catch (e: Exception) {
                 // Provide detailed exception info for debugging
-                "Error: ${e.localizedMessage ?: "Unknown error"}"
+                return "Error: ${e.localizedMessage ?: "Unknown error"}"
             }
+//            return "test"
         }
 
         // Function to show the notification
