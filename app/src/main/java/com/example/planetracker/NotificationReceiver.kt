@@ -12,22 +12,22 @@ import okhttp3.Request
 import org.json.JSONObject
 import java.io.IOException
 import android.os.AsyncTask
+import android.util.Log
+import com.google.firebase.firestore.FirebaseFirestore
 import java.util.Date
 
 class NotificationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        // Call AsyncTask to fetch the plane data and show the notification
         FetchPlanesTask(context).execute()
-        val updateIntent = Intent("com.example.planetracker.UPDATE_VIEW") // Custom action
+        val updateIntent = Intent("com.example.planetracker.UPDATE_VIEW")
         val sdf = SimpleDateFormat("HH:mm:ss")
         val currentTime = sdf.format(Date())
 
         updateIntent.putExtra("update_text", "Last Updated: ${currentTime}")
-        updateIntent.flags = Intent.FLAG_RECEIVER_FOREGROUND // Restrict to your app
+        updateIntent.flags = Intent.FLAG_RECEIVER_FOREGROUND
         context?.sendBroadcast(updateIntent)
     }
 
-    // AsyncTask to perform network operations off the main thread
     private class FetchPlanesTask(val context: Context) : AsyncTask<Void, Void, String>() {
         override fun doInBackground(vararg params: Void?): String {
             return getPlanes()
@@ -44,10 +44,40 @@ class NotificationReceiver : BroadcastReceiver() {
         private fun getPlanes(): String {
             val client = OkHttpClient()
 
+            fun sendDocumentToFirebase(lat : String, lon : String, model : String, reg : String) {
+                Log.d("FirestoreDebug", "sendDocumentToFirebase() called!")
+
+                val getDate = SimpleDateFormat("dd:MM:yyyy")
+                val currentDate = getDate.format(Date()).toString()
+
+                val getTime = SimpleDateFormat("HH:mm:ss")
+                val currentTime = getTime.format(Date()).toString()
+
+                val db = FirebaseFirestore.getInstance()
+                val docRef = db.collection(currentDate).document(reg)
+
+                val data = hashMapOf(
+                    "Latitude" to lat,
+                    "Longitude" to lon,
+                    "Model" to model,
+                    "Registration" to reg,
+                    "Time" to currentTime
+                )
+
+                docRef.set(data)
+                    .addOnSuccessListener {
+                        Log.d("FirestoreDebug", "Document successfully written!")
+                    }
+                    .addOnFailureListener { e ->
+                        Log.e("FirestoreDebug", "Error writing document", e)
+                    }
+            }
+
+
             val request = Request.Builder()
                 .url("https://flight-radar1.p.rapidapi.com/flights/list-in-boundary?bl_lat=51.636985&bl_lng=-0.034332&tr_lat=51.725474&tr_lng=0.211487&limit=300")
                 .get()
-                .addHeader("x-rapidapi-key", "apikey")
+                .addHeader("x-rapidapi-key", "e28bedd27emshc9e5a17c08b8a2fp14b25djsn7f83bb280012")
                 .addHeader("x-rapidapi-host", "flight-radar1.p.rapidapi.com")
                 .build()
 
@@ -70,6 +100,12 @@ class NotificationReceiver : BroadcastReceiver() {
                 val planeList = mutableListOf<String>()
 
                 for (i in 0 until planeArray.length()) {
+                    sendDocumentToFirebase(
+                        planeArray.getJSONArray(i).optString(2, "Unknown"),
+                        planeArray.getJSONArray(i).optString(3, "Unknown"),
+                        planeArray.getJSONArray(i).optString(9, "Unknown"),
+                        planeArray.getJSONArray(i).optString(10, "Unknown")
+                    )
                     val planeInfo = planeArray.getJSONArray(i).optString(9, "Unknown")
                     planeList.add(planeInfo)
                 }
@@ -79,7 +115,6 @@ class NotificationReceiver : BroadcastReceiver() {
                 // Provide detailed exception info for debugging
                 return "Error: ${e.localizedMessage ?: "Unknown error"}"
             }
-//            return "test"
         }
 
         // Function to show the notification

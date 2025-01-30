@@ -9,6 +9,7 @@ import android.content.IntentFilter
 import android.os.Bundle
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import com.google.firebase.FirebaseApp
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
@@ -17,6 +18,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        FirebaseApp.initializeApp(this)
         scheduleNotification()
 
         updateReceiver = object : BroadcastReceiver() {
