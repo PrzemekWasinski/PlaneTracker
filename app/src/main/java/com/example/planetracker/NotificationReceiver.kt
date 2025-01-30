@@ -61,7 +61,8 @@ class NotificationReceiver : BroadcastReceiver() {
                     "Longitude" to lon,
                     "Model" to model,
                     "Registration" to reg,
-                    "Time" to currentTime
+                    "Time" to currentTime,
+                    "Date" to currentDate
                 )
 
                 docRef.set(data)
@@ -77,7 +78,7 @@ class NotificationReceiver : BroadcastReceiver() {
             val request = Request.Builder()
                 .url("https://flight-radar1.p.rapidapi.com/flights/list-in-boundary?bl_lat=51.636985&bl_lng=-0.034332&tr_lat=51.725474&tr_lng=0.211487&limit=300")
                 .get()
-                .addHeader("x-rapidapi-key", "Your api key")
+                .addHeader("x-rapidapi-key", "Your rapid API key")
                 .addHeader("x-rapidapi-host", "flight-radar1.p.rapidapi.com")
                 .build()
 
