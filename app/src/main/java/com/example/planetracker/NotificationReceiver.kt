@@ -77,7 +77,7 @@ class NotificationReceiver : BroadcastReceiver() {
             val request = Request.Builder()
                 .url("https://flight-radar1.p.rapidapi.com/flights/list-in-boundary?bl_lat=51.636985&bl_lng=-0.034332&tr_lat=51.725474&tr_lng=0.211487&limit=300")
                 .get()
-                .addHeader("x-rapidapi-key", "e28bedd27emshc9e5a17c08b8a2fp14b25djsn7f83bb280012")
+                .addHeader("x-rapidapi-key", "Your api key")
                 .addHeader("x-rapidapi-host", "flight-radar1.p.rapidapi.com")
                 .build()
 
