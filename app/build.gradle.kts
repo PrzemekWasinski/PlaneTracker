@@ -47,6 +47,10 @@ dependencies {
     implementation(libs.androidx.activity)
     implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.espresso.core)
+    implementation(libs.androidx.appcompat.v161) // Or the version you need
+    implementation(libs.androidx.recyclerview) // Or the version you need
+
+
 
     // Firebase dependencies
     implementation("com.google.firebase:firebase-analytics:21.0.0") // Specify the version for Firebase Analytics
