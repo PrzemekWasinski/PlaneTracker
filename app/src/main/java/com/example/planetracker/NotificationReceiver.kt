@@ -11,8 +11,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import android.os.AsyncTask
-import android.util.Log
-import com.google.firebase.firestore.FirebaseFirestore
 import java.util.Date
 
 class NotificationReceiver : BroadcastReceiver() {
@@ -49,37 +47,6 @@ class NotificationReceiver : BroadcastReceiver() {
                 notificationMessage = "Planes Nearby"
                 val client = OkHttpClient()
 
-                fun sendDocumentToFirebase(lat: String, lon: String, model: String, reg: String) {
-                    Log.d("FirestoreDebug", "sendDocumentToFirebase() called!")
-
-                    val getDate = SimpleDateFormat("dd-MM-yyyy")
-                    val currentDate = getDate.format(Date()).toString()
-
-                    val getTime = SimpleDateFormat("HH:mm:ss")
-                    val currentTime = getTime.format(Date()).toString()
-
-                    val db = FirebaseFirestore.getInstance()
-                    val docRef = db.collection(currentDate).document(reg)
-
-                    val data = hashMapOf(
-                        "Latitude" to lat,
-                        "Longitude" to lon,
-                        "Model" to model,
-                        "Registration" to reg,
-                        "Time" to currentTime,
-                        "Date" to currentDate
-                    )
-
-                    docRef.set(data)
-                        .addOnSuccessListener {
-                            Log.d("FirestoreDebug", "Document successfully written!")
-                        }
-                        .addOnFailureListener { e ->
-                            Log.e("FirestoreDebug", "Error writing document", e)
-                        }
-                }
-
-
                 val request = Request.Builder()
                     .url("https://flight-radar1.p.rapidapi.com/flights/list-in-boundary?bl_lat=51.636985&bl_lng=-0.034332&tr_lat=51.725474&tr_lng=0.211487&limit=300")
                     .get()
@@ -97,6 +64,9 @@ class NotificationReceiver : BroadcastReceiver() {
 
                     val jsonObject = JSONObject(responseString)
                     if (!jsonObject.has("aircraft")) {
+                        if (jsonObject.has("message")) {
+                            return jsonObject.getString("message")
+                        }
                         return "API Error: 'aircraft' key not found"
                     }
 
@@ -104,17 +74,11 @@ class NotificationReceiver : BroadcastReceiver() {
                     val planeList = mutableListOf<String>()
 
                     for (i in 0 until planeArray.length()) {
-                        sendDocumentToFirebase(
-                            planeArray.getJSONArray(i).optString(2, "Unknown"),
-                            planeArray.getJSONArray(i).optString(3, "Unknown"),
-                            planeArray.getJSONArray(i).optString(9, "Unknown"),
-                            planeArray.getJSONArray(i).optString(10, "Unknown")
-                        )
                         val planeInfo = planeArray.getJSONArray(i).optString(9, "Unknown")
                         planeList.add(planeInfo)
                     }
 
-                    if (planeList.size < 4) {
+                    if (planeList.size < 2) {
                         return "No planes found"
                     }
                     notificationMessage = "Planes Nearby"

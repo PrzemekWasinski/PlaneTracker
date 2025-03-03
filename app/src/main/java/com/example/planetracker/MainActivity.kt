@@ -127,7 +127,7 @@ class MainActivity : AppCompatActivity() {
             this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val interval = TimeUnit.MINUTES.toMillis(120)
+        val interval = TimeUnit.MINUTES.toMillis(1)
         val triggerTime = System.currentTimeMillis() + interval
         alarmManager.setRepeating(AlarmManager.RTC_WAKEUP, triggerTime, interval, pendingIntent)
     }
