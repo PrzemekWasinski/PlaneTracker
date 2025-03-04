@@ -4,20 +4,24 @@ import socket
 import json
 import time
 import urllib.request
+import os
+import sys
 from datetime import datetime
-import firebase
-from firebase_admin import firebase_admin, credentials, db
+import firebase_admin
+from firebase_admin import credentials, db
 
-#Connecting to Firebase
 if not firebase_admin._apps:
     cred = credentials.Certificate("./rpi-flight-tracker-firebase-adminsdk-fbsvc-a6afd2b5b0.json")
     firebase_admin.initialize_app(cred, {
         "databaseURL": "https://rpi-flight-tracker-default-rtdb.europe-west1.firebasedatabase.app"
     })
 
-#Connecting to ADSB Receiver
-SERVER_JSON = "http://localhost:8080/data/aircraft.json"
 SERVER_SBS = ("localhost", 30003)
+
+def restart_script():
+    print("Restarting script")
+    time.sleep(2)
+    os.execv(sys.executable, ["python3"] + sys.argv)
 
 def connect(server):
     while True:
@@ -26,10 +30,9 @@ def connect(server):
             print(f"Connected to {server}")
             return sock
         except Exception as error:
-            print(f"Failed to conect to server: {error}, retrying in 3 seconds.")
+            print(f"Failed to connect: {error}. Attempting to reconnect")
             time.sleep(3)
 
-#Turn message into a dict
 def split_message(message):
     plane_info = message.split(",")
 
@@ -45,57 +48,80 @@ def split_message(message):
         "lon": plane_info[15] or "N/A"
     }
 
-#Upload the dict to Firebase
 def upload_data(path, data):
     try:
-        #Get data
         ref = db.reference(path)
         current_data = ref.get()
 
-        #If data is empty upload plane data
         if current_data is None:
             ref.set(data)
             print(f"Data added at {path}")
-            return
-        
-        #Otherwise check for "N/A" values and replace them with new data
-        new_data = {}
+        else:
+            new_data = {}
 
-        for key, value in data.items():
-            current_value = current_data.get(key, "N/A")
+            for key, value in data.items():
+                current_value = current_data.get(key, "N/A")
 
-            if value == "N/A":
-                new_data[key] = current_value
-            else:
-                new_data[key] = value
+                if value == "N/A":
+                    new_data[key] = current_value
+                else:
+                    new_data[key] = value
 
-        ref.set(new_data)
-        print(f"Data updated at {path}")
+            ref.set(new_data)
+            print(f"Data updated at {path}")
     except Exception as error:
-        print(f"Error uploading data: {error}")
+        print(f"Firebase Error: {error}")
 
-#Receive planes
 def fetch_planes():
-    sock = connect(SERVER_SBS)
-    buffer = ""
-    run = True
+    start_time = time.time() 
 
-    while run:
+    while True:
+        sock = connect(SERVER_SBS)
+        buffer = ""
+        last_data_time = time.time()
+
         try:
-            buffer += sock.recv(1024).decode(errors="ignore")
-            messages = buffer.split("\n")
-            buffer = messages.pop()
-            today = datetime.today().strftime("%Y-%m-%d")
+            while True:
+                if time.time() - start_time > 600:
+                    print("Restarting script")
+                    restart_script()
 
-            for i in messages:
-                plane_data = split_message(i)
-                if plane_data:
-                    upload_data(f"/{today}/{plane_data['icao']}", plane_data)
+                data = sock.recv(1024)
+                if not data:
+                    raise ConnectionError("ADS-B Server disconnected")
 
-            time.sleep(0.1)
-        except (socket.error, KeyboardInterrupt):
-            run = False
+                buffer += data.decode(errors="ignore")
+                messages = buffer.split("\n")
+                buffer = messages.pop()
+                today = datetime.today().strftime("%Y-%m-%d")
+                new_data = False
+
+                for message in messages:
+                    plane_data = split_message(message)
+                    if plane_data:
+                        upload_data(f"/{today}/{plane_data['icao']}", plane_data)
+                        new_data = True
+
+                if new_data:
+                    last_data_time = time.time()  
+                else:
+                    if time.time() - last_data_time > 10:  
+                        print("No new data")
+                        last_data_time = time.time()
+
+                time.sleep(0.1) 
+
+        except (socket.error, ConnectionError) as error:
+            print(f"Connection lost: {error}. Attempting to reconnect")
+            time.sleep(3)
+        except KeyboardInterrupt:
+            print("\nStopping script")
+            break
+        except Exception as error:
+            print(f"Unexpected error: {error}")
+            time.sleep(3)  
+        finally:
+            sock.close()
 
 if __name__ == "__main__":
     fetch_planes()
-

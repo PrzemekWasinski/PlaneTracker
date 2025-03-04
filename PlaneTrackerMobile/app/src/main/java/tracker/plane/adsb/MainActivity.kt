@@ -5,14 +5,79 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import com.google.firebase.database.FirebaseDatabase
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import org.json.JSONArray
+import org.json.JSONObject
+import com.google.firebase.database.*
+import kotlinx.coroutines.*
+
 
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-
         scheduleNotification()
+
+        val tvMainText = findViewById<TextView>(R.id.tvMain)
+
+        CoroutineScope(Dispatchers.Main).launch {
+            val jsonArray = getData("2025-03-04")
+            var text = ""
+            for (i in 0..jsonArray.length() - 1) {
+                var hh = jsonArray.getJSONObject(i)
+
+                text += hh
+            }
+            tvMainText.text = jsonArray.toString()
+        }
+    }
+
+    private suspend fun getData(path: String): JSONArray {
+        val database = FirebaseDatabase.getInstance()
+        val reference = database.getReference(path)
+
+        val jsonArray = JSONArray()
+
+        try {
+            val snapshot = reference.get().await()
+
+            if (!snapshot.exists()) {
+                return jsonArray
+            }
+
+            for (i in snapshot.children) {
+                val icao = i.key
+
+                val altitude = i.child("altitude").value ?: "N/A"
+                val lat = i.child("lat").value ?: "N/A"
+                val lon = i.child("lon").value ?: "N/A"
+                val speed = i.child("speed").value ?: "N/A"
+                val track = i.child("track").value ?: "N/A"
+
+                val planeJson = JSONObject()
+                planeJson.put("icao", icao)
+                planeJson.put("altitude", altitude)
+                planeJson.put("lat", lat)
+                planeJson.put("lon", lon)
+                planeJson.put("speed", speed)
+                planeJson.put("track", track)
+
+                val jsonObject = JSONObject()
+                jsonObject.put(icao, planeJson)
+                jsonArray.put(jsonObject)
+            }
+        } catch (error: Exception) {
+            error.printStackTrace()
+        }
+
+        return jsonArray
     }
 
     private fun scheduleNotification() {
