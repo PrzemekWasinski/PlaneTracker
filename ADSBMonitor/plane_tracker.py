@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 
 import socket
-import json
 import time
-import urllib.request
 import os
 import sys
 from datetime import datetime
@@ -40,7 +38,6 @@ def split_message(message):
         return None
     return {
         "icao": plane_info[4], 
-        "date": plane_info[6] or "N/A",
         "altitude": plane_info[11] or "N/A",
         "speed": plane_info[12] or "N/A",
         "track": plane_info[13] or "N/A",
