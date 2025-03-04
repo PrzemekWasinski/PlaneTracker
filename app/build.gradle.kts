@@ -1,20 +1,19 @@
 plugins {
-    alias(libs.plugins.android.application)
+    alias(libs.plugins.android.application) // Remove duplicate 'id("com.android.application")'
     alias(libs.plugins.kotlin.android)
-    id("com.google.gms.google-services") // Ensure you're using Google Services plugin
+    id("com.google.gms.google-services") // Ensure it's only in app-level
 }
 
 android {
-    namespace = "com.example.planetracker"
+    namespace = "tracker.plane.adsb"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.planetracker"
-        minSdk = 31
+        applicationId = "tracker.plane.adsb"
+        minSdk = 24
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -27,45 +26,35 @@ android {
             )
         }
     }
-
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
-
     kotlinOptions {
-        jvmTarget = "11"
+        jvmTarget = "17"
     }
 }
 
 dependencies {
-    // AndroidX libraries
-    implementation(libs.androidx.core.ktx.v1120) // Ensure the correct version
-    implementation(libs.androidx.appcompat.v161)
-    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.appcompat)
     implementation(libs.material)
     implementation(libs.androidx.activity)
     implementation(libs.androidx.constraintlayout)
-    implementation(libs.androidx.espresso.core)
-    implementation(libs.androidx.appcompat.v161) // Or the version you need
-    implementation(libs.androidx.recyclerview) // Or the version you need
-
-
-
-    // Firebase dependencies
-    implementation("com.google.firebase:firebase-analytics:21.0.0") // Specify the version for Firebase Analytics
-    implementation("com.google.firebase:firebase-firestore-ktx:24.10.0") // Correct version for Firestore
-    implementation("com.google.firebase:firebase-auth-ktx:22.3.0") // Firebase Auth KTX
-
-    // Networking and JSON
-    implementation(libs.okhttp3.okhttp)
-    implementation(libs.json)
-
-    // Kotlin extensions and other libraries
-    implementation(libs.kotlinx.coroutines.android)
-
-    // Test dependencies
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+    implementation(libs.androidx.work.runtime.ktx)
+
+    // Firebase (use BOM)
+
+
+    // Firebase BOM to manage Firebase library versions
+    // Firebase Realtime Database SDK
+    implementation("com.google.firebase:firebase-database-ktx")
+    // Firebase Analytics (optional)
+    implementation("com.google.firebase:firebase-analytics-ktx")
+    // Firebase BOM to manage versions
+    implementation(platform("com.google.firebase:firebase-bom:32.3.1"))
+    // Add any other Firebase libraries as needed
 }

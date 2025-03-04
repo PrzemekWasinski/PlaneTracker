@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="AppInsightsSettings">
-    <option name="selectedTabId" value="Firebase Crashlytics" />
     <option name="tabSettings">
       <map>
         <entry key="Firebase Crashlytics">
@@ -9,10 +8,10 @@
             <InsightsFilterSettings>
               <option name="connection">
                 <ConnectionSetting>
-                  <option name="appId" value="com.example.planetracker" />
-                  <option name="mobileSdkAppId" value="1:902298640753:android:968b5102b0e1520db116d0" />
-                  <option name="projectId" value="planetracker-61afa" />
-                  <option name="projectNumber" value="902298640753" />
+                  <option name="appId" value="tracker.plane.adsb" />
+                  <option name="mobileSdkAppId" value="1:463800203443:android:c9528face9d53e01a7d8c6" />
+                  <option name="projectId" value="rpi-flight-tracker" />
+                  <option name="projectNumber" value="463800203443" />
                 </ConnectionSetting>
               </option>
               <option name="signal" value="SIGNAL_UNSPECIFIED" />

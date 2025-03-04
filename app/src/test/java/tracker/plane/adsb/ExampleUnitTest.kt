@@ -1,4 +1,4 @@
-package com.example.planetracker
+package tracker.plane.adsb
 
 import org.junit.Test
 
