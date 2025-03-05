@@ -30,12 +30,14 @@ class MainActivity : AppCompatActivity() {
         CoroutineScope(Dispatchers.Main).launch {
             val jsonArray = getData("2025-03-04")
             var text = ""
-            for (i in 0..jsonArray.length() - 1) {
-                var hh = jsonArray.getJSONObject(i)
 
-                text += hh
+            for (i in 0..jsonArray.length() - 1) {
+                var plane = jsonArray.getJSONObject(i)
+                var icao = plane.keys().next()
+                text += "$icao "
             }
-            tvMainText.text = jsonArray.toString()
+
+            tvMainText.text = text
         }
     }
 
@@ -90,7 +92,7 @@ class MainActivity : AppCompatActivity() {
         alarmManager.setRepeating(
             AlarmManager.RTC_WAKEUP,
             System.currentTimeMillis(),
-            1 * 60 * 1000, // 3 minutes in milliseconds
+            1 * 60 * 1000,
             pendingIntent
         )
     }

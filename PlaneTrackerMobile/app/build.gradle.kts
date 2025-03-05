@@ -1,7 +1,7 @@
 plugins {
-    alias(libs.plugins.android.application) // Remove duplicate 'id("com.android.application")'
+    alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    id("com.google.gms.google-services") // Ensure it's only in app-level
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -46,15 +46,7 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     implementation(libs.androidx.work.runtime.ktx)
 
-    // Firebase (use BOM)
-
-
-    // Firebase BOM to manage Firebase library versions
-    // Firebase Realtime Database SDK
     implementation("com.google.firebase:firebase-database-ktx")
-    // Firebase Analytics (optional)
     implementation("com.google.firebase:firebase-analytics-ktx")
-    // Firebase BOM to manage versions
     implementation(platform("com.google.firebase:firebase-bom:32.3.1"))
-    // Add any other Firebase libraries as needed
 }

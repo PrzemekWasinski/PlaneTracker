@@ -20,7 +20,6 @@ class NotificationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        // Create the Notification Channel (Only required for Android 8+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 "NOTIFY_CHANNEL",
@@ -30,7 +29,6 @@ class NotificationReceiver : BroadcastReceiver() {
             notificationManager.createNotificationChannel(channel)
         }
 
-        // Function to fetch data asynchronously
         suspend fun getData(path: String): JSONArray {
             val database = FirebaseDatabase.getInstance()
             val reference = database.getReference(path)
@@ -72,24 +70,25 @@ class NotificationReceiver : BroadcastReceiver() {
             return jsonArray
         }
 
-        // Create notification asynchronously
         CoroutineScope(Dispatchers.Main).launch {
             val jsonArray = getData("2025-03-04")
             var notificationText = ""
+            var planeCounter = 0
+
             for (i in 0 until jsonArray.length()) {
-                val plane = jsonArray.getJSONObject(i)
-                notificationText += plane.toString() + "\n"
+                var plane = jsonArray.getJSONObject(i)
+                var icao = plane.keys().next()
+                notificationText += "$icao "
+                planeCounter++
             }
 
-            // Now that we have the data, build the notification
             val notification: Notification = NotificationCompat.Builder(context, "NOTIFY_CHANNEL")
-                .setContentTitle("Planes found")
+                .setContentTitle("$planeCounter planes found")
                 .setContentText(notificationText)
                 .setSmallIcon(android.R.drawable.ic_notification_overlay)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .build()
 
-            // Show the Notification
             notificationManager.notify(1, notification)
         }
     }
