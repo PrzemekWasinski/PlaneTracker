@@ -6,6 +6,7 @@ import android.content.Intent
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.icu.text.SimpleDateFormat
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.google.firebase.database.FirebaseDatabase
@@ -15,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Date
 
 class NotificationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
@@ -71,13 +73,17 @@ class NotificationReceiver : BroadcastReceiver() {
         }
 
         CoroutineScope(Dispatchers.Main).launch {
-            val jsonArray = getData("2025-03-04")
+            val sdf = SimpleDateFormat("yyyy-mm-dd")
+            val currentDate = sdf.format(Date())
+            val lastDate = "2025-03-04"
+
+            val jsonArray = getData(lastDate)
             var notificationText = ""
             var planeCounter = 0
 
-            for (i in 0 until jsonArray.length()) {
-                var plane = jsonArray.getJSONObject(i)
-                var icao = plane.keys().next()
+            for (i in 0..jsonArray.length() - 1) {
+                val plane = jsonArray.getJSONObject(i)
+                val icao = plane.keys().next()
                 notificationText += "$icao "
                 planeCounter++
             }

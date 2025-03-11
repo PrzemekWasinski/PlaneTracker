@@ -4,6 +4,7 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.icu.text.SimpleDateFormat
 import android.os.Bundle
 import android.util.Log
 import android.widget.TextView
@@ -17,6 +18,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import com.google.firebase.database.*
 import kotlinx.coroutines.*
+import java.util.Date
 
 
 class MainActivity : AppCompatActivity() {
@@ -28,12 +30,16 @@ class MainActivity : AppCompatActivity() {
         val tvMainText = findViewById<TextView>(R.id.tvMain)
 
         CoroutineScope(Dispatchers.Main).launch {
-            val jsonArray = getData("2025-03-04")
+            val sdf = SimpleDateFormat("yyyy-mm-dd")
+            val currentDate = sdf.format(Date())
+            val lastDate = "2025-03-04"
+
+            val jsonArray = getData(lastDate)
             var text = ""
 
             for (i in 0..jsonArray.length() - 1) {
-                var plane = jsonArray.getJSONObject(i)
-                var icao = plane.keys().next()
+                val plane = jsonArray.getJSONObject(i)
+                val icao = plane.keys().next()
                 text += "$icao "
             }
 
