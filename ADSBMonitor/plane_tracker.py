@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import socket
 import time
 from datetime import datetime
@@ -11,6 +13,7 @@ import os
 import threading
 import gc 
 import queue
+import requests
 from functions import *
 
 if not firebase_admin._apps:
@@ -30,10 +33,23 @@ window = pygame.display.set_mode((width, height), pygame.FULLSCREEN)
 
 text_font1 = pygame.font.Font(os.path.join("textures", "DS-DIGI.TTF"), 50)
 text_font2 = pygame.font.Font(os.path.join("textures", "DS-DIGI.TTF"), 40)
-text_font3 = pygame.font.Font(os.path.join("textures", "DS-DIGI.TTF"), 26)
+text_font3 = pygame.font.Font(os.path.join("textures", "NaturalMono-Bold.ttf"), 14)
 
 message_queue = queue.Queue(maxsize=20)
 display_messages = []
+plane_stats = {
+        "Boeing": 0, 
+        "Airbus": 0, 
+        "Embraer": 0,
+        "ATR": 0,
+        "Lockheed Martin": 0,
+        "Bombardier": 0,
+        "Gulfstream": 0,
+        "Cessna": 0,
+        "Piper": 0,
+        "Other": 0,
+        "Total": 0
+    }
 
 upload_threads = []
 MAX_UPLOAD_THREADS = 5
@@ -44,14 +60,14 @@ def draw_text(text, font, text_col, x, y):
 
 def fetch_planes():
     start_time = time.time()
-
-    while True:
+    
+    while run:
         sock = connect(SERVER_SBS, message_queue)
         buffer = ""
         last_data_time = time.time()
 
         try:
-            while True:
+            while run:
                 if time.time() - start_time > 600:
                     message_queue.put("Restarting Plane Tracker...")
                     restart_script()
@@ -68,7 +84,7 @@ def fetch_planes():
                 new_data = False
 
                 for message in messages:
-                    plane_data = split_message(message)
+                    plane_data = split_message(message, message_queue, plane_stats)
                     if plane_data:
                         add_upload_task(today, plane_data)
                         new_data = True
@@ -104,7 +120,7 @@ def add_upload_task(today, plane_data):
     
     t = threading.Thread(
         target=upload_data, 
-        args=(f"/{today}/{plane_data['icao']}", plane_data, message_queue)
+        args=(plane_data, message_queue)
     )
     t.daemon = True
     t.start()
@@ -127,16 +143,50 @@ def process_message_queue():
     
     if len(display_messages) > 15:
         display_messages = display_messages[-15:]
-    
+
+bright = pygame.image.load(os.path.join("textures", "icons", "bright.png"))
+dark = pygame.image.load(os.path.join("textures", "icons", "dark.png"))
+pause = pygame.image.load(os.path.join("textures", "icons", "pause.png"))
+resume = pygame.image.load(os.path.join("textures", "icons", "resume.png"))
+off = pygame.image.load(os.path.join("textures", "icons", "off.png"))
+
+bright_image = bright.get_rect(topleft=(590, 415))
+dark_image = dark.get_rect(topleft=(640, 415))
+pause_image = pause.get_rect(topleft=(690, 415))
+resume_image = resume.get_rect(topleft=(690, 415))
+off_image = off.get_rect(topleft=(740, 415))
+
 def main():
+    global run
+    run = True
+    drk = 0
+
     start_fetching_planes()
-    
     last_update_time = time.time()
+    
     while True:
+        mouse_x, mouse_y = pygame.mouse.get_pos()
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 exit()
+            elif event.type == MOUSEBUTTONDOWN:
+                if mouse_x > 585 and mouse_y > 410 and mouse_x < 625 and mouse_y < 450:
+                    if drk > 10:
+                        drk -= 10
+                elif mouse_x > 635 and mouse_y > 410 and mouse_x < 685 and mouse_y < 450:
+                    if drk < 250:
+                        drk += 10
+                elif mouse_x > 685 and mouse_y > 410 and mouse_x < 725 and mouse_y < 450:
+                    if run:
+                        run = False
+                    else:
+                        run = True
+                        start_fetching_planes()
+                elif mouse_x > 735 and mouse_y > 410 and mouse_x < 785 and mouse_y < 450:
+                    pygame.quit()
+
 
         process_message_queue()
 
@@ -148,15 +198,38 @@ def main():
 
         with open("/sys/class/thermal/thermal_zone0/temp", "r") as temp:
             cpu_temp = int(temp.read()) / 1000 
+        
+        pygame.draw.rect(window, (255 - drk, 255 - drk, 255 - drk), (585, 410, 40, 40))
+        pygame.draw.rect(window, (255 - drk, 255 - drk, 255 - drk), (635, 410, 40, 40))
 
-        draw_text(str(current_time), text_font1, (255, 0, 0), 628, 10)
-        draw_text(str(current_date), text_font2, (255, 0, 0), 620, 50)
-        draw_text("RAM: " + str(ram_percentage) + "%", text_font2, (255, 255, 255), 626, 100)
-        draw_text("CPU: " + str(int(cpu_temp)) + "*C", text_font2, (255, 255, 255), 626, 135)
+        if run:
+            pygame.draw.rect(window, (255 - drk, 255 - drk, 255 - drk), (685, 410, 40, 40))
+            window.blit(pause, (pause_image))
+        else:
+            pygame.draw.rect(window, (255 - drk, 255 - drk, 255 - drk), (685, 410, 40, 40))
+            window.blit(resume, (resume_image))
 
-        start = 10
+        pygame.draw.rect(window, (255 - drk, 0, 0), (735, 410, 40, 40)) 
+
+        window.blit(bright, (bright_image))
+        window.blit(dark, (dark_image))
+        window.blit(off, (off_image))
+
+        draw_text(str(current_time), text_font1, (255 - drk, 0, 0), 585, 10)
+        draw_text(str(current_date), text_font2, (255 - drk, 0, 0), 585, 50)
+        draw_text("RAM: " + str(ram_percentage) + "%", text_font2, (255 - drk, 255 - drk, 255 - drk), 585, 100)
+        draw_text("CPU: " + str(int(cpu_temp)) + "*C", text_font2, (255 - drk, 255 - drk, 255 - drk), 585, 135)
+
+        start = 177
+        for i in plane_stats:
+            draw_text(f"{i}: {str(plane_stats[i])}", text_font3, (255 - drk, 255 - drk, 255 - drk), 585, start)
+            start += 20
+
+
+
+        start = 20
         for i, message in enumerate(display_messages):
-            draw_text(message, text_font3, (255, 255, 255), 20, start)
+            draw_text(message, text_font3, (255 - drk, 255 - drk, 255 - drk), 20, start)
             start += 30
 
         pygame.display.update()
