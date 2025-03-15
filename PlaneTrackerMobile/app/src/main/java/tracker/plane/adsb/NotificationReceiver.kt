@@ -45,24 +45,41 @@ class NotificationReceiver : BroadcastReceiver() {
                 }
 
                 for (i in snapshot.children) {
-                    val icao = i.key
+                    val key = i.key
 
                     val altitude = i.child("altitude").value ?: "N/A"
+                    val code_mode_s = i.child("code_mode_s").value ?: "N/A"
+                    val icao = i.child("icao").value ?: "N/A"
+                    val icao_type_code = i.child("icao_type_code").value ?: "N/A"
                     val lat = i.child("lat").value ?: "N/A"
                     val lon = i.child("lon").value ?: "N/A"
+                    val manufacturer = i.child("manufacturer").value ?: "N/A"
+                    val model = i.child("model").value ?: "N/A"
+                    val operator_flag = i.child("operator_flag").value ?: "N/A"
+                    val owner = i.child("owner").value ?: "N/A"
+                    val registration = i.child("registration").value ?: "N/A"
                     val speed = i.child("speed").value ?: "N/A"
+                    val spotted_at = i.child("spotted_at").value ?: "N/A"
                     val track = i.child("track").value ?: "N/A"
 
                     val planeJson = JSONObject()
-                    planeJson.put("icao", icao)
                     planeJson.put("altitude", altitude)
+                    planeJson.put("code_mode_s", code_mode_s)
+                    planeJson.put("icao", icao)
+                    planeJson.put("icao_type_code", icao_type_code)
                     planeJson.put("lat", lat)
                     planeJson.put("lon", lon)
+                    planeJson.put("manufacturer", manufacturer)
+                    planeJson.put("model", model)
+                    planeJson.put("operator_flag", operator_flag)
+                    planeJson.put("owner", owner)
+                    planeJson.put("registration", registration)
                     planeJson.put("speed", speed)
+                    planeJson.put("spotted_at", spotted_at)
                     planeJson.put("track", track)
 
                     val jsonObject = JSONObject()
-                    jsonObject.put(icao, planeJson)
+                    jsonObject.put(key, planeJson)
                     jsonArray.put(jsonObject)
                 }
             } catch (error: Exception) {
@@ -73,23 +90,22 @@ class NotificationReceiver : BroadcastReceiver() {
         }
 
         CoroutineScope(Dispatchers.Main).launch {
-            val sdf = SimpleDateFormat("yyyy-mm-dd")
+            val sdf = SimpleDateFormat("YYYY-MM-dd")
             val currentDate = sdf.format(Date())
-            val lastDate = "2025-03-04"
 
-            val jsonArray = getData(lastDate)
+            val jsonArray = getData(currentDate)
             var notificationText = ""
             var planeCounter = 0
 
             for (i in 0..jsonArray.length() - 1) {
                 val plane = jsonArray.getJSONObject(i)
-                val icao = plane.keys().next()
-                notificationText += "$icao "
+                val planeInfo = plane.keys().next()
+                //notificationText += plane.getJSONObject(planeInfo).getString("manufacturer").toString() + " " + plane.getJSONObject(planeInfo).getString("model").toString() + " "
                 planeCounter++
             }
 
             val notification: Notification = NotificationCompat.Builder(context, "NOTIFY_CHANNEL")
-                .setContentTitle("$planeCounter planes found")
+                .setContentTitle("$planeCounter Planes Found")
                 .setContentText(notificationText)
                 .setSmallIcon(android.R.drawable.ic_notification_overlay)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)

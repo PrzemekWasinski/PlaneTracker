@@ -6,7 +6,7 @@ import os
 import sys
 from datetime import datetime
 import firebase_admin
-from firebase_admin import credentials, db
+from firebase_admin import db
 import requests
 
 def restart_script():
@@ -72,29 +72,44 @@ def split_message(message, message_queue, plane_stats):
         "code_mode_s": str(response.json()["ModeS"]) or "-",
         "operator_flag": str(response.json()["OperatorFlagCode"]) or "-",
         "owner": str(response.json()["RegisteredOwners"]) or "-",
-        "model": str(response.json()["Type"]).replace(".", "") or "-",
+        "model": str(response.json()["Type"]).replace(".", "").replace("/", "") or "-",
         "spotted_at": datetime.now().strftime("%H:%M:%S") or "-"
-    }
-
-def upload_data(data, message_queue):
+    }    
+        
+def upload_data(data, message_queue, cpu_temp, ram_percentage, run):
     try:
         today = datetime.today().strftime("%Y-%m-%d")
         ref = db.reference(f"{today}/{data['manufacturer']} {data['model']} ({data['registration']}) {data['owner']}")
+        stats_ref = db.reference(f"{today}/device_stats")
+        
+        # Handle plane data as before
         current_data = ref.get()
-
         if current_data is None:
             ref.set(data)
         else:
             new_data = {}
-
             for key, value in data.items():
                 current_value = current_data.get(key, "-")
-
                 if value == "-":
                     new_data[key] = current_value
                 else:
                     new_data[key] = value
-
             ref.set(new_data)
+        
+        current_stats = stats_ref.get() or {}
+        
+        device_stats = {}
+        if "cpu_temp" not in current_stats or current_stats["cpu_temp"] != cpu_temp:
+            device_stats["cpu_temp"] = cpu_temp
+            
+        if "ram_percentage" not in current_stats or current_stats["ram_percentage"] != ram_percentage:
+            device_stats["ram_percentage"] = ram_percentage
+            
+        if "run" not in current_stats:
+            device_stats["run"] = run
+        
+        if device_stats:
+            stats_ref.update(device_stats)
+            
     except Exception as error:
         message_queue.put(f"Firebase Error: {error}")

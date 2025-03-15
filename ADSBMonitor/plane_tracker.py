@@ -13,7 +13,6 @@ import os
 import threading
 import gc 
 import queue
-import requests
 from functions import *
 
 if not firebase_admin._apps:
@@ -28,6 +27,7 @@ pygame.init()
 
 width = 800
 height = 480
+run = True
 
 window = pygame.display.set_mode((width, height), pygame.FULLSCREEN)
 
@@ -38,18 +38,18 @@ text_font3 = pygame.font.Font(os.path.join("textures", "NaturalMono-Bold.ttf"), 
 message_queue = queue.Queue(maxsize=20)
 display_messages = []
 plane_stats = {
-        "Boeing": 0, 
-        "Airbus": 0, 
-        "Embraer": 0,
-        "ATR": 0,
-        "Lockheed Martin": 0,
-        "Bombardier": 0,
-        "Gulfstream": 0,
-        "Cessna": 0,
-        "Piper": 0,
-        "Other": 0,
-        "Total": 0
-    }
+    "Boeing": 0, 
+    "Airbus": 0, 
+    "Embraer": 0,
+    "ATR": 0,
+    "Lockheed Martin": 0,
+    "Bombardier": 0,
+    "Gulfstream": 0,
+    "Cessna": 0,
+    "Piper": 0,
+    "Other": 0,
+    "Total": 0
+}
 
 upload_threads = []
 MAX_UPLOAD_THREADS = 5
@@ -60,14 +60,48 @@ def draw_text(text, font, text_col, x, y):
 
 def fetch_planes():
     start_time = time.time()
+    global run
     
-    while run:
+    while True:  # Outer continuous loop
+        today = datetime.today().strftime("%Y-%m-%d")
+        ref = db.reference(f"{today}/device_stats")
+        
+        try:
+            data = ref.get()
+            if data is not None and "run" in data:
+                run = data["run"]
+            else:
+                ref.update({"run": run})
+        except Exception as e:
+            message_queue.put(f"Firebase error: {e}")
+        
+        if not run:
+            message_queue.put("Tracker paused, waiting for Firebase update or manual resume...")
+            time.sleep(3)
+            continue  
+        
+        message_queue.put("Starting plane tracking...")
         sock = connect(SERVER_SBS, message_queue)
         buffer = ""
         last_data_time = time.time()
+        firebase_check_time = time.time()
 
         try:
             while run:
+                if time.time() - firebase_check_time > 2:
+                    try:
+                        fb_data = ref.get()
+                        if fb_data and "run" in fb_data:
+                            new_run_value = fb_data["run"]
+                            if run != new_run_value:  
+                                run = new_run_value
+                                if not run:
+                                    message_queue.put("Tracking paused from Firebase")
+                                    break  
+                    except Exception as e:
+                        message_queue.put(f"Firebase check error: {e}")
+                    
+                    firebase_check_time = time.time() 
                 if time.time() - start_time > 600:
                     message_queue.put("Restarting Plane Tracker...")
                     restart_script()
@@ -80,13 +114,12 @@ def fetch_planes():
                 buffer += data.decode(errors="ignore")
                 messages = buffer.split("\n")
                 buffer = messages.pop()
-                today = datetime.today().strftime("%Y-%m-%d")
                 new_data = False
 
                 for message in messages:
                     plane_data = split_message(message, message_queue, plane_stats)
                     if plane_data:
-                        add_upload_task(today, plane_data)
+                        add_upload_task(plane_data, cpu_temp, ram_percentage, run)
                         new_data = True
 
                 if new_data:
@@ -110,7 +143,7 @@ def fetch_planes():
         finally:
             sock.close()
 
-def add_upload_task(today, plane_data):
+def add_upload_task(plane_data, cpu_temp, ram_percentage, run):
     global upload_threads
     upload_threads = [t for t in upload_threads if t.is_alive()]
 
@@ -120,7 +153,7 @@ def add_upload_task(today, plane_data):
     
     t = threading.Thread(
         target=upload_data, 
-        args=(plane_data, message_queue)
+        args=(plane_data, message_queue, cpu_temp, ram_percentage, run)
     )
     t.daemon = True
     t.start()
@@ -157,8 +190,10 @@ resume_image = resume.get_rect(topleft=(690, 415))
 off_image = off.get_rect(topleft=(740, 415))
 
 def main():
+    global cpu_temp
+    global ram_percentage
     global run
-    run = True
+
     drk = 0
 
     start_fetching_planes()
@@ -179,11 +214,16 @@ def main():
                     if drk < 250:
                         drk += 10
                 elif mouse_x > 685 and mouse_y > 410 and mouse_x < 725 and mouse_y < 450:
+                    run = not run 
+    
+                    today = datetime.today().strftime("%Y-%m-%d")
+                    ref = db.reference(f"{today}/device_stats")
+                    ref.set({"run": run})
+    
                     if run:
-                        run = False
+                        message_queue.put("Resumed tracking")
                     else:
-                        run = True
-                        start_fetching_planes()
+                        message_queue.put("Paused tracking")
                 elif mouse_x > 735 and mouse_y > 410 and mouse_x < 785 and mouse_y < 450:
                     pygame.quit()
 
@@ -225,8 +265,6 @@ def main():
             draw_text(f"{i}: {str(plane_stats[i])}", text_font3, (255 - drk, 255 - drk, 255 - drk), 585, start)
             start += 20
 
-
-
         start = 20
         for i, message in enumerate(display_messages):
             draw_text(message, text_font3, (255 - drk, 255 - drk, 255 - drk), 20, start)
@@ -242,3 +280,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
