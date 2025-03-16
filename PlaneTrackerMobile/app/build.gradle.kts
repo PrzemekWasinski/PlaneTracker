@@ -46,6 +46,9 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     implementation(libs.androidx.work.runtime.ktx)
 
+    implementation("androidx.cardview:cardview:1.0.0")
+    implementation(libs.androidx.recyclerview)
+
     implementation("com.google.firebase:firebase-database-ktx")
     implementation("com.google.firebase:firebase-analytics-ktx")
     implementation(platform("com.google.firebase:firebase-bom:32.3.1"))

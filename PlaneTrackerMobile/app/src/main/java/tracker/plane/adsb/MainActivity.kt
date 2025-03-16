@@ -9,6 +9,8 @@ import android.os.Bundle
 import android.util.Log
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.google.firebase.database.FirebaseDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,12 +24,21 @@ import java.util.Date
 
 
 class MainActivity : AppCompatActivity() {
+    private var layoutManager: RecyclerView.LayoutManager? = null
+    private lateinit var adapter: RecyclerAdapter
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        scheduleNotification()
+        val recyclerView = findViewById<RecyclerView>(R.id.recyclerView)
 
-        val tvMainText = findViewById<TextView>(R.id.tvMain)
+        layoutManager = LinearLayoutManager(this)
+        recyclerView.layoutManager = layoutManager
+
+        adapter = RecyclerAdapter()
+        recyclerView.adapter = adapter
+
+        scheduleNotification()
 
         CoroutineScope(Dispatchers.Main).launch {
             val sdf = SimpleDateFormat("YYYY-MM-dd")
@@ -35,14 +46,21 @@ class MainActivity : AppCompatActivity() {
 
             val jsonArray = getData(currentDate)
             var text = ""
+            val planeList = mutableListOf<PlaneData>()
 
             for (i in 0..jsonArray.length() - 1) {
-                val plane = jsonArray.getJSONObject(i)
-                val planeInfo = plane.keys().next()
-                text += plane.getJSONObject(planeInfo).getString("manufacturer") + " " + plane.getJSONObject(planeInfo).getString("model") + " "
-            }
+                val planeJson = jsonArray.getJSONObject(i).getJSONObject(jsonArray.getJSONObject(i).keys().next())
 
-            tvMainText.text = text
+                val plane = PlaneData(
+                    planeModel = planeJson.getString("manufacturer") + " " + planeJson.getString("model"),
+                    airlineName = planeJson.getString("owner"),
+                    registration = planeJson.getString("registration"),
+                    spottedAt = "Last seen at: " + planeJson.getString("spotted_at")
+                )
+
+                planeList.add(plane)
+            }
+            adapter.updateData(planeList)
         }
     }
 

@@ -1,5 +1,6 @@
 [versions]
 agp = "8.8.0"
+cardviewV7 = "28.0.0"
 firebaseBom = "33.10.0"
 firebaseFirestoreKtx = "24.10.0"
 kotlin = "2.1.0"
@@ -11,11 +12,14 @@ appcompat = "1.7.0"
 material = "1.12.0"
 activity = "1.10.1"
 constraintlayout = "2.2.1"
+recyclerview = "1.4.0"
 workRuntimeKtx = "2.10.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-recyclerview = { module = "androidx.recyclerview:recyclerview", version.ref = "recyclerview" }
 androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "workRuntimeKtx" }
+cardview-v7 = { module = "com.android.support:cardview-v7", version.ref = "cardviewV7" }
 firebase-analytics = { module = "com.google.firebase:firebase-analytics" }
 firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
 firebase-firestore-ktx = { module = "com.google.firebase:firebase-firestore-ktx", version.ref = "firebaseFirestoreKtx" }
