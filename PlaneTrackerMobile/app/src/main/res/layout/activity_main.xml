@@ -7,13 +7,99 @@
     android:layout_height="match_parent"
     tools:context=".MainActivity">
 
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/navBarContainer"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:background="@drawable/navbar_background"
+        app:layout_constraintHeight_percent="0.15"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <DatePicker
+            android:id="@+id/datePicker"
+            android:layout_width="227dp"
+            android:layout_height="218dp"
+            android:calendarViewShown="false"
+            android:datePickerMode="spinner"
+            android:scaleX="0.8"
+            android:scaleY="0.8"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <TextView
+            android:id="@+id/RAMUsage"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="RAM: 0%"
+            android:textColor="@android:color/white"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            app:layout_constraintBottom_toTopOf="@+id/CPUTemp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintHorizontal_bias="0.0"
+            app:layout_constraintStart_toEndOf="@+id/datePicker"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintVertical_chainStyle="spread" />
+
+        <TextView
+            android:id="@+id/CPUTemp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="CPU: 0°C"
+            android:textColor="@android:color/white"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            app:layout_constraintStart_toEndOf="@+id/datePicker"
+            app:layout_constraintTop_toBottomOf="@+id/RAMUsage" />
+
+        <Button
+            android:id="@+id/refreshButton"
+            android:layout_width="100dp"
+            android:layout_height="36dp"
+            android:text="Refresh"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintHorizontal_bias="0.511"
+            app:layout_constraintStart_toEndOf="@+id/datePicker" />
+
+        <Switch
+            android:id="@+id/runSwitch"
+            android:layout_width="72dp"
+            android:layout_height="24dp"
+            android:layout_marginBottom="12dp"
+            android:text="Run"
+            app:layout_constraintBottom_toTopOf="@+id/refreshButton"
+            app:layout_constraintStart_toEndOf="@+id/datePicker" />
+
+        <Switch
+            android:id="@+id/nearbySwitch"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:text="Nearby"
+            app:layout_constraintBottom_toTopOf="@+id/refreshButton"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+        <Button
+            android:id="@+id/settingsButton"
+            android:layout_width="34dp"
+            android:layout_height="41dp"
+            android:text="Button"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/recyclerView"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_height="0dp"
+        app:layout_constraintTop_toBottomOf="@+id/navBarContainer"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        app:layout_constraintEnd_toEndOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

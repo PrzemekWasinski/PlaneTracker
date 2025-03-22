@@ -58,6 +58,8 @@ def split_message(message, message_queue, plane_stats):
         return None
     
     plane_stats["Total"] += 1
+    model = str(response.json()["Type"]).replace(".", "")
+    model_stripped = model.replace("/", "")
 
     return {
         "icao": plane_info[4] or "-", 
@@ -72,29 +74,39 @@ def split_message(message, message_queue, plane_stats):
         "code_mode_s": str(response.json()["ModeS"]) or "-",
         "operator_flag": str(response.json()["OperatorFlagCode"]) or "-",
         "owner": str(response.json()["RegisteredOwners"]) or "-",
-        "model": str(response.json()["Type"]).replace(".", "").replace("/", "") or "-",
-        "spotted_at": datetime.now().strftime("%H:%M:%S") or "-"
+        "model": model_stripped or "-",
+        "spotted_at": datetime.now().strftime("%H:%M:%S") or "-",
+        "location_history": {}
     }    
         
 def upload_data(data, message_queue, cpu_temp, ram_percentage, run):
     try:
         today = datetime.today().strftime("%Y-%m-%d")
         ref = db.reference(f"{today}/{data['manufacturer']} {data['model']} ({data['registration']}) {data['owner']}")
-        stats_ref = db.reference(f"{today}/device_stats")
+        stats_ref = db.reference("device_stats")
         
-        # Handle plane data as before
         current_data = ref.get()
         if current_data is None:
+            data["location_history"] = {}
             ref.set(data)
         else:
+            location_history = current_data.get("location_history", {})
+
+            if data["lat"] != "-" and data["lon"] != "-":
+                location_history[data["spotted_at"]] = [data["lat"], data["lon"]]
+                data["location_history"] = location_history
+            else:
+                data["location_history"] = location_history
+
             new_data = {}
             for key, value in data.items():
-                current_value = current_data.get(key, "-")
-                if value == "-":
+                current_value = current_data.get(key)
+                if value == "-" or []:
                     new_data[key] = current_value
                 else:
                     new_data[key] = value
             ref.set(new_data)
+
         
         current_stats = stats_ref.get() or {}
         

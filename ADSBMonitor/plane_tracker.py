@@ -59,12 +59,11 @@ def draw_text(text, font, text_col, x, y):
     window.blit(img, (x, y))
 
 def fetch_planes():
-    start_time = time.time()
     global run
     
-    while True:  # Outer continuous loop
+    while True:
         today = datetime.today().strftime("%Y-%m-%d")
-        ref = db.reference(f"{today}/device_stats")
+        ref = db.reference(f"device_stats")
         
         try:
             data = ref.get()
@@ -102,9 +101,6 @@ def fetch_planes():
                         message_queue.put(f"Firebase check error: {e}")
                     
                     firebase_check_time = time.time() 
-                if time.time() - start_time > 600:
-                    message_queue.put("Restarting Plane Tracker...")
-                    restart_script()
 
                 data = sock.recv(1024)
                 if not data:
@@ -193,13 +189,17 @@ def main():
     global cpu_temp
     global ram_percentage
     global run
-
+    start_time = time.time()
     drk = 0
 
     start_fetching_planes()
     last_update_time = time.time()
     
     while True:
+        if time.time() - start_time > 300:
+            print("Restarting plane tracker...")
+            restart_script()
+
         mouse_x, mouse_y = pygame.mouse.get_pos()
 
         for event in pygame.event.get():
@@ -217,7 +217,7 @@ def main():
                     run = not run 
     
                     today = datetime.today().strftime("%Y-%m-%d")
-                    ref = db.reference(f"{today}/device_stats")
+                    ref = db.reference(f"device_stats")
                     ref.set({"run": run})
     
                     if run:
