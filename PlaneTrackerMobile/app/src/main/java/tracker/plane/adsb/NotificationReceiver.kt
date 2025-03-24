@@ -1,14 +1,18 @@
 package tracker.plane.adsb
 
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.icu.text.SimpleDateFormat
+import java.text.SimpleDateFormat // Adjusted import for broader compatibility
 import android.os.Build
+import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
 import com.google.firebase.database.FirebaseDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,8 +21,15 @@ import kotlinx.coroutines.tasks.await
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Date
+import android.Manifest
+import java.util.concurrent.TimeUnit
+import kotlin.math.*
+
+
 
 class NotificationReceiver : BroadcastReceiver() {
+    private lateinit var fusedLocationClient: FusedLocationProviderClient
+
     override fun onReceive(context: Context, intent: Intent?) {
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
@@ -32,6 +43,7 @@ class NotificationReceiver : BroadcastReceiver() {
         }
 
         suspend fun getData(path: String): JSONArray {
+            fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
             val database = FirebaseDatabase.getInstance()
             val reference = database.getReference(path)
 
@@ -89,6 +101,52 @@ class NotificationReceiver : BroadcastReceiver() {
             return jsonArray
         }
 
+        suspend fun getLocation(context: Context): JSONObject {
+            val json = JSONObject()
+            return try {
+                if (ActivityCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.ACCESS_FINE_LOCATION
+                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    val location = fusedLocationClient.lastLocation.await()
+                    val latitude = location?.latitude ?: 0.0
+                    val longitude = location?.longitude ?: 0.0
+                    json.put("lat", latitude)
+                    json.put("lon", longitude)
+                } else {
+                    json.put("lat", 0.0)
+                    json.put("lon", 0.0)
+                }
+                json
+            } catch (e: Exception) {
+                e.printStackTrace()
+                json.put("lat", 0.0)
+                json.put("lon", 0.0)
+                json
+            }
+        }
+
+        fun checkIfNear(userLat: Double, userLon: Double, targetLat: Double, targetLon: Double): Boolean {
+            val earthRadius = 6371000.0
+
+            val userLatRad = Math.toRadians(userLat)
+            val userLonRad = Math.toRadians(userLon)
+            val targetLatRad = Math.toRadians(targetLat)
+            val targetLonRad = Math.toRadians(targetLon)
+
+            val deltaLat = targetLatRad - userLatRad
+            val deltaLon = targetLonRad - userLonRad
+
+            //The math was made by chatgpt because i suck at math
+            val a = sin(deltaLat / 2).pow(2) + cos(userLatRad) * cos(targetLatRad) * sin(deltaLon / 2).pow(2)
+            val c = 2 * atan2(sqrt(a), sqrt(1 - a))
+
+            val distance = earthRadius * c
+
+            return distance <= 2000
+        }
+
         CoroutineScope(Dispatchers.Main).launch {
             val sdf = SimpleDateFormat("YYYY-MM-dd")
             val currentDate = sdf.format(Date())
@@ -97,21 +155,61 @@ class NotificationReceiver : BroadcastReceiver() {
             var notificationText = ""
             var planeCounter = 0
 
-            for (i in 0..jsonArray.length() - 1) {
-                val plane = jsonArray.getJSONObject(i)
-                val planeInfo = plane.keys().next()
-                //notificationText += plane.getJSONObject(planeInfo).getString("manufacturer").toString() + " " + plane.getJSONObject(planeInfo).getString("model").toString() + " "
-                planeCounter++
+            val userLocation = getLocation(context)
+            val userLat = userLocation.getDouble("lat")
+            val userLon = userLocation.getDouble("lon")
+            notificationText = ""
+
+            for (i in 0 until jsonArray.length()) {
+                try {
+                    val plane = jsonArray.getJSONObject(i)
+                    val planeInfo = plane.keys().next()
+
+                    val planeLat = plane.getJSONObject(planeInfo).getString("lat")
+                    val planeLon = plane.getJSONObject(planeInfo).getString("lon")
+                    val spottedAt = plane.getJSONObject(planeInfo).getString("spotted_at")
+
+                    if (planeLat != "-" && planeLon != "-" && planeLat != "N/A" && planeLon != "N/A") {
+                        val timeFormat = SimpleDateFormat("HH:mm:ss")
+                        val spottedTime: Date? = try {
+                            val currentDate = Date()
+                            val dateString = SimpleDateFormat("yyyy-MM-dd").format(currentDate) + " " + spottedAt
+                            val fullFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+                            fullFormat.parse(dateString)
+                        } catch (e: Exception) {
+                            null
+                        }
+
+                        if (spottedTime != null) {
+                            val currentDate = Date()
+
+                            val timeDifferenceInMillis = currentDate.time - spottedTime.time
+                            val timeDifferenceInMinutes = TimeUnit.MILLISECONDS.toMinutes(timeDifferenceInMillis)
+
+                            if (checkIfNear(userLat, userLon, planeLat.toDouble(), planeLon.toDouble()) && timeDifferenceInMinutes <= 1) {
+                                notificationText += plane.getJSONObject(planeInfo)
+                                    .getString("manufacturer") + " " + plane.getJSONObject(planeInfo)
+                                    .getString("model") + ", "
+                                planeCounter++
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    notificationText += e.message
+                }
             }
 
-            val notification: Notification = NotificationCompat.Builder(context, "NOTIFY_CHANNEL")
-                .setContentTitle("$planeCounter Planes Found")
-                .setContentText(notificationText)
-                .setSmallIcon(android.R.drawable.ic_notification_overlay)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .build()
+            if (planeCounter > 0) {
+                val notification: Notification =
+                    NotificationCompat.Builder(context, "NOTIFY_CHANNEL")
+                        .setContentTitle("$planeCounter Planes Found")
+                        .setContentText(notificationText)
+                        .setSmallIcon(android.R.drawable.ic_notification_overlay)
+                        .setPriority(NotificationCompat.PRIORITY_HIGH)
+                        .build()
 
-            notificationManager.notify(1, notification)
+                notificationManager.notify(1, notification)
+            }
         }
     }
 }
