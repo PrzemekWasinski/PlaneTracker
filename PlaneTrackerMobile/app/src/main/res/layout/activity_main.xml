@@ -12,10 +12,11 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:background="@drawable/navbar_background"
+        app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintHeight_percent="0.15"
-        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintHorizontal_bias="0.0"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent">
+        app:layout_constraintTop_toTopOf="parent">
 
         <DatePicker
             android:id="@+id/datePicker"
@@ -40,20 +41,21 @@
             app:layout_constraintBottom_toTopOf="@+id/CPUTemp"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintHorizontal_bias="0.0"
-            app:layout_constraintStart_toEndOf="@+id/datePicker"
-            app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintVertical_chainStyle="spread" />
+            app:layout_constraintStart_toEndOf="@+id/datePicker" />
 
         <TextView
             android:id="@+id/CPUTemp"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
             android:text="CPU: 0°C"
             android:textColor="@android:color/white"
             android:textSize="18sp"
             android:textStyle="bold"
+            app:layout_constraintBottom_toTopOf="@+id/refreshButton"
             app:layout_constraintStart_toEndOf="@+id/datePicker"
-            app:layout_constraintTop_toBottomOf="@+id/RAMUsage" />
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintVertical_bias="0.615" />
 
         <Button
             android:id="@+id/refreshButton"
@@ -69,13 +71,14 @@
         <Switch
             android:id="@+id/runSwitch"
             android:layout_width="72dp"
-            android:layout_height="24dp"
+            android:layout_height="26dp"
+            android:layout_marginTop="4dp"
             android:layout_marginBottom="18dp"
             android:text="Run"
-            app:layout_constraintBottom_toBottomOf="@+id/CPUTemp"
+            app:layout_constraintBottom_toBottomOf="@+id/RAMUsage"
             app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintVertical_bias="1.0" />
+            app:layout_constraintTop_toTopOf="@+id/RAMUsage"
+            app:layout_constraintVertical_bias="0.12" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 

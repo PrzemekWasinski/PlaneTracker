@@ -144,7 +144,7 @@ class NotificationReceiver : BroadcastReceiver() {
 
             val distance = earthRadius * c
 
-            return distance <= 2000
+            return distance <= 8000
         }
 
         CoroutineScope(Dispatchers.Main).launch {
@@ -186,7 +186,7 @@ class NotificationReceiver : BroadcastReceiver() {
                             val timeDifferenceInMillis = currentDate.time - spottedTime.time
                             val timeDifferenceInMinutes = TimeUnit.MILLISECONDS.toMinutes(timeDifferenceInMillis)
 
-                            if (checkIfNear(userLat, userLon, planeLat.toDouble(), planeLon.toDouble()) && timeDifferenceInMinutes <= 1) {
+                            if (checkIfNear(userLat, userLon, planeLat.toDouble(), planeLon.toDouble()) && timeDifferenceInMinutes <= 2) {
                                 notificationText += plane.getJSONObject(planeInfo)
                                     .getString("manufacturer") + " " + plane.getJSONObject(planeInfo)
                                     .getString("model") + ", "
