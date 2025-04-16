@@ -4,7 +4,7 @@ import socket
 import time
 from datetime import datetime
 import firebase_admin
-from firebase_admin import credentials
+from firebase_admin import credentials, db
 import pygame
 from pygame.locals import *
 from time import gmtime, strftime
@@ -13,7 +13,7 @@ import os
 import threading
 import gc 
 import queue
-from functions import *
+from functions import restart_script, connect, split_message, upload_data, coords_to_xy
 
 if not firebase_admin._apps:
     cred = credentials.Certificate("./rpi-flight-tracker-firebase-adminsdk-fbsvc-a6afd2b5b0.json")
@@ -33,7 +33,9 @@ window = pygame.display.set_mode((width, height), pygame.FULLSCREEN)
 
 text_font1 = pygame.font.Font(os.path.join("textures", "DS-DIGI.TTF"), 50)
 text_font2 = pygame.font.Font(os.path.join("textures", "DS-DIGI.TTF"), 40)
-text_font3 = pygame.font.Font(os.path.join("textures", "NaturalMono-Bold.ttf"), 14)
+text_font3 = pygame.font.Font(os.path.join("textures", "NaturalMono-Bold.ttf"), 9)
+
+active_planes = {}
 
 message_queue = queue.Queue(maxsize=20)
 display_messages = []
@@ -58,6 +60,11 @@ def draw_text(text, font, text_col, x, y):
     img = font.render(text, True, text_col)
     window.blit(img, (x, y))
 
+def draw_text_centered(text, font, color, x, y):
+    img = font.render(text, True, color)
+    rect = img.get_rect(center=(x, y))
+    window.blit(img, rect)
+
 def fetch_planes():
     global run
     
@@ -72,15 +79,15 @@ def fetch_planes():
             else:
                 ref.update({"run": run})
         except Exception as e:
-            message_queue.put(f"Firebase error: {e}")
+            print(f"Firebase error: {e}")
         
         if not run:
-            message_queue.put("Tracker paused, waiting for Firebase update or manual resume...")
+            print("Tracker paused, waiting for Firebase update or manual resume...")
             time.sleep(3)
             continue  
         
-        message_queue.put("Starting plane tracking...")
-        sock = connect(SERVER_SBS, message_queue)
+        print("Starting plane tracking...")
+        sock = connect(SERVER_SBS)
         buffer = ""
         last_data_time = time.time()
         firebase_check_time = time.time()
@@ -95,16 +102,16 @@ def fetch_planes():
                             if run != new_run_value:  
                                 run = new_run_value
                                 if not run:
-                                    message_queue.put("Tracking paused from Firebase")
+                                    print("Tracking paused from Firebase")
                                     break  
                     except Exception as e:
-                        message_queue.put(f"Firebase check error: {e}")
+                        print(f"Firebase check error: {e}")
                     
                     firebase_check_time = time.time() 
 
                 data = sock.recv(1024)
                 if not data:
-                    message_queue.put("ADSB Server disconnected")
+                    print("ADSB Server disconnected")
                     break
 
                 buffer += data.decode(errors="ignore")
@@ -113,33 +120,33 @@ def fetch_planes():
                 new_data = False
 
                 for message in messages:
-                    plane_data = split_message(message, message_queue, plane_stats)
+                    plane_data = split_message(message, message_queue)
                     if plane_data:
-                        add_upload_task(plane_data, cpu_temp, ram_percentage, run)
+                        add_upload_task(plane_data, cpu_temp, ram_percentage, run, plane_stats)
                         new_data = True
 
                 if new_data:
                     last_data_time = time.time()
                 else:
                     if time.time() - last_data_time > 10:
-                        message_queue.put("No New Data")
+                        print("No New Data")
                         last_data_time = time.time()
 
                 time.sleep(0.05)
 
         except (socket.error, ConnectionError) as error:
-            message_queue.put(f"Connection lost: {error}. Attempting to reconnect")
+            print(f"Connection lost: {error}. Attempting to reconnect")
             time.sleep(3)
         except KeyboardInterrupt:
-            message_queue.put("Stopping Script")
+            print("Stopping Script")
             break
         except Exception as error:
-            message_queue.put(f"Unexpected error: {error}")
+            print(f"Unexpected error: {error}")
             time.sleep(3)
         finally:
             sock.close()
 
-def add_upload_task(plane_data, cpu_temp, ram_percentage, run):
+def add_upload_task(plane_data, cpu_temp, ram_percentage, run, plane_stats):
     global upload_threads
     upload_threads = [t for t in upload_threads if t.is_alive()]
 
@@ -149,7 +156,7 @@ def add_upload_task(plane_data, cpu_temp, ram_percentage, run):
     
     t = threading.Thread(
         target=upload_data, 
-        args=(plane_data, message_queue, cpu_temp, ram_percentage, run)
+        args=(plane_data, cpu_temp, ram_percentage, run, plane_stats, active_planes)
     )
     t.daemon = True
     t.start()
@@ -190,47 +197,27 @@ def main():
     global ram_percentage
     global run
     start_time = time.time()
-    drk = 0
 
     start_fetching_planes()
     last_update_time = time.time()
     
     while True:
-        if time.time() - start_time > 300:
+        if time.time() - start_time > 1800:
             print("Restarting plane tracker...")
             restart_script()
 
         mouse_x, mouse_y = pygame.mouse.get_pos()
+        range = 100
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 exit()
             elif event.type == MOUSEBUTTONDOWN:
-                if mouse_x > 585 and mouse_y > 410 and mouse_x < 625 and mouse_y < 450:
-                    if drk > 10:
-                        drk -= 10
-                elif mouse_x > 635 and mouse_y > 410 and mouse_x < 685 and mouse_y < 450:
-                    if drk < 250:
-                        drk += 10
-                elif mouse_x > 685 and mouse_y > 410 and mouse_x < 725 and mouse_y < 450:
-                    run = not run 
-    
-                    today = datetime.today().strftime("%Y-%m-%d")
-                    ref = db.reference(f"device_stats")
-                    ref.set({"run": run})
-    
-                    if run:
-                        message_queue.put("Resumed tracking")
-                    else:
-                        message_queue.put("Paused tracking")
-                elif mouse_x > 735 and mouse_y > 410 and mouse_x < 785 and mouse_y < 450:
-                    pygame.quit()
+                ...
 
 
         process_message_queue()
-
-        pygame.draw.rect(window, (0, 0, 0), (0, 0, width, height))
 
         current_time = strftime("%H:%M:%S", gmtime())
         current_date = strftime("%d/%m/%Y", gmtime())
@@ -238,37 +225,47 @@ def main():
 
         with open("/sys/class/thermal/thermal_zone0/temp", "r") as temp:
             cpu_temp = int(temp.read()) / 1000 
-        
-        pygame.draw.rect(window, (255 - drk, 255 - drk, 255 - drk), (585, 410, 40, 40))
-        pygame.draw.rect(window, (255 - drk, 255 - drk, 255 - drk), (635, 410, 40, 40))
 
-        if run:
-            pygame.draw.rect(window, (255 - drk, 255 - drk, 255 - drk), (685, 410, 40, 40))
-            window.blit(pause, (pause_image))
-        else:
-            pygame.draw.rect(window, (255 - drk, 255 - drk, 255 - drk), (685, 410, 40, 40))
-            window.blit(resume, (resume_image))
+        pygame.draw.rect(window, (0, 0, 0), (0, 0, width, height))
+        pygame.draw.polygon(window, (255, 0, 0), [(400, 238), (402, 240), (400, 242), (398, 240)])
 
-        pygame.draw.rect(window, (255 - drk, 0, 0), (735, 410, 40, 40)) 
+        now = time.time()
+        expired_keys = []
 
-        window.blit(bright, (bright_image))
-        window.blit(dark, (dark_image))
-        window.blit(off, (off_image))
+        for icao, plane in list(active_planes.items()):
+            last_seen = plane.get("last_seen", 0)
 
-        draw_text(str(current_time), text_font1, (255 - drk, 0, 0), 585, 10)
-        draw_text(str(current_date), text_font2, (255 - drk, 0, 0), 585, 50)
-        draw_text("RAM: " + str(ram_percentage) + "%", text_font2, (255 - drk, 255 - drk, 255 - drk), 585, 100)
-        draw_text("CPU: " + str(int(cpu_temp)) + "*C", text_font2, (255 - drk, 255 - drk, 255 - drk), 585, 135)
+            # Remove planes that haven't updated in 30 seconds
+            if now - last_seen > 30:
+                expired_keys.append(icao)
+                continue
 
-        start = 177
-        for i in plane_stats:
-            draw_text(f"{i}: {str(plane_stats[i])}", text_font3, (255 - drk, 255 - drk, 255 - drk), 585, start)
-            start += 20
+            # Use the last known good position
+            lat = plane.get("last_lat")
+            lon = plane.get("last_lon")
 
-        start = 20
-        for i, message in enumerate(display_messages):
-            draw_text(message, text_font3, (255 - drk, 255 - drk, 255 - drk), 20, start)
-            start += 30
+            if lat is None or lon is None:
+                continue
+
+            try:
+                plane_string = f"{plane.get('manufacturer', '-') or '-'} {plane.get('model', '-') or '-'}"
+                spotted_at = plane.get("spotted_at", "-")
+                x, y = coords_to_xy(float(lat), float(lon), range)
+
+                pygame.draw.polygon(window, (255, 255, 255), [(x, y - 2), (x + 2, y), (x, y + 2), (x - 2, y)])
+
+                draw_text(str(cpu_temp), text_font1, (255, 0, 0), 20, 20)
+                draw_text(str(ram_percentage), text_font1, (255, 0, 0), 20, 70)
+
+                draw_text_centered(plane_string, text_font3, (255, 255, 255), x, y - 9)
+                draw_text_centered(spotted_at, text_font3, (255, 255, 255), x, y + 9)
+            except Exception as e:
+                print(f"Drawing error for {icao}: {e}")
+
+        # Remove stale planes
+        for key in expired_keys:
+            del active_planes[key]
+
 
         pygame.display.update()
 
@@ -280,4 +277,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
