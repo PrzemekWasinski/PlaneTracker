@@ -13,7 +13,10 @@ import os
 import threading
 import gc 
 import queue
-from functions import restart_script, connect, split_message, upload_data, coords_to_xy
+import requests
+import math
+import re
+from functions import restart_script, connect, coords_to_xy, split_message, clean_string
 
 if not firebase_admin._apps: #Initialise Firebase
     cred = credentials.Certificate("./rpi-flight-tracker-firebase-adminsdk-fbsvc-a6afd2b5b0.json")
@@ -24,7 +27,7 @@ if not firebase_admin._apps: #Initialise Firebase
 SERVER_SBS = ("localhost", 30003) #ADSB port
 
 pygame.init()
-run = True
+run = False #Initialize as False until we check Firebase
 
 width = 800 #Display dimensions
 height = 480
@@ -34,124 +37,259 @@ text_font1 = pygame.font.Font(os.path.join("textures", "NaturalMono-Bold.ttf"), 
 text_font2 = pygame.font.Font(os.path.join("textures", "DS-DIGI.TTF"), 40)
 text_font3 = pygame.font.Font(os.path.join("textures", "NaturalMono-Bold.ttf"), 9)
 
-active_planes = {} #Stores planes received in the last 30 seconds
+active_planes = {} #Stores all recently detected planes
+displayed_planes = {} #Planes that should be drawn with fading effect
 
-message_queue = queue.Queue(maxsize=20) #Messages that will be displayed in the menu get stored here
+message_queue = queue.Queue(maxsize=20) #Messages that will be displayed in the menu
 display_messages = []
 
-upload_threads = [] #Threads to decrease CPU usage
-MAX_UPLOAD_THREADS = 5
+is_receiving = False
+is_processing = False
 
-def draw_text(text, font, text_col, x, y): #Functoins to display text
+display_duration = 30
+fade_duration = 10    
+
+# Event to control the data collection thread
+tracker_running_event = threading.Event()
+
+def draw_text(text, font, text_col, x, y):
     img = font.render(text, True, text_col)
     window.blit(img, (x, y))
 
-def draw_text_centered(text, font, color, x, y):
-    img = font.render(text, True, color)
+def draw_text_centered(text, font, rgb_val, x, y):
+    img = font.render(text, True, rgb_val)
     rect = img.get_rect(center=(x, y))
     window.blit(img, rect)
 
-def fetch_planes(): #Function that receives and handles ADSB signals
+def draw_fading_text(text, font, rgb_val, x, y, alpha):
+    img = font.render(text, True, rgb_val)
+    img.set_alpha(alpha)
+    rect = img.get_rect(center=(x, y))
+    window.blit(img, rect)
+
+def check_run_status():
     global run
-    
-    while True: #Check if tracker is paused
-        ref = db.reference(f"device_stats")
-        
-        try:
-            data = ref.get()
-            if data is not None and "run" in data:
-                run = data["run"]
+    try:
+        ref = db.reference("device_stats")
+        data = ref.get()
+        if data is not None and "run" in data:
+            run = data["run"]
+            if run:
+                tracker_running_event.set()
             else:
-                ref.update({"run": run})
-        except Exception as e:
-            print(f"Firebase error: {e}")
+                tracker_running_event.clear()
+        else:
+            #Set default value if not found
+            ref.update({"run": run})
+            if run:
+                tracker_running_event.set()
+            else:
+                tracker_running_event.clear()
+    except Exception as error:
+        print(f"Firebase error checking run status: {error}")
+    
+    return run
+
+def firebase_watcher(): #Keep checking Firebase if run is true
+    global run
+    while True:
+        prev_run_state = run
+        current_run_state = check_run_status()
         
-        if not run:
-            print("Tracker paused, waiting for Firebase update or manual resume...")
-            time.sleep(3)
-            continue  
+        if prev_run_state != current_run_state:
+            if current_run_state:
+                message_queue.put("Tracker activated - Starting data collection")
+                print("Tracker activated via Firebase")
+            else:
+                message_queue.put("Tracker paused via Firebase")
+                print("Tracker paused via Firebase")
         
-        print("Starting plane tracking...")
+        time.sleep(3) #Check every 3 seconds
+
+def collect_and_process_data():
+    global active_planes, displayed_planes, is_receiving, is_processing, cpu_temp, ram_percentage
+
+    while True:
+        #Wait until the tracker is set to running
+        tracker_running_event.wait()
+        
+        collected_messages = []
+        is_receiving = True
+        
+        print("Collecting ADSB data for 1 second...")
         sock = connect(SERVER_SBS)
+        sock.settimeout(0.1)
+        
         buffer = ""
-        last_data_time = time.time()
-        firebase_check_time = time.time()
-
+        end_time = time.time() + 1.0  
+        
         try:
-            while run:
-                if time.time() - firebase_check_time > 2:
-                    try:
-                        fb_data = ref.get()
-                        if fb_data and "run" in fb_data:
-                            new_run_value = fb_data["run"]
-                            if run != new_run_value:  
-                                run = new_run_value
-                                if not run:
-                                    print("Tracking paused from Firebase")
-                                    break  
-                    except Exception as e:
-                        print(f"Firebase check error: {e}")
+            while time.time() < end_time and tracker_running_event.is_set():
+                try:
+                    data = sock.recv(1024)
+                    if not data:
+                        print("ADSB Server disconnected")
+                        break
                     
-                    firebase_check_time = time.time() 
-
-                data = sock.recv(1024)
-                if not data:
-                    print("ADSB Server disconnected")
-                    break
-
-                buffer += data.decode(errors="ignore")
-                messages = buffer.split("\n")
-                buffer = messages.pop()
-                new_data = False
-
-                for message in messages: #Seperate message data
-                    plane_data = split_message(message, message_queue)
-                    if plane_data:
-                        add_upload_task(plane_data, cpu_temp, ram_percentage, run, active_planes, message_queue) #Upload message to Firebase
-                        new_data = True
-
-                if new_data: #Update the last time the receiver received data
-                    last_data_time = time.time()
-                else:
-                    if time.time() - last_data_time > 10:
-                        print("No New Data")
-                        last_data_time = time.time()
-
-                time.sleep(0.05)
-
-        except (socket.error, ConnectionError) as error: #Error handling
-            print(f"Connection lost: {error}. Attempting to reconnect")
-            time.sleep(3)
-        except KeyboardInterrupt:
-            print("Stopping Script")
-            break
+                    buffer += data.decode(errors="ignore")
+                    messages = buffer.split("\n")
+                    buffer = messages.pop()
+                    
+                    for message in messages:
+                        plane_data = split_message(message)
+                        if plane_data:
+                            collected_messages.append(plane_data)
+                            
+                except socket.timeout:
+                    continue  
+                    
         except Exception as error:
-            print(f"Unexpected error: {error}")
-            time.sleep(3)
+            print(f"Data collection error: {error}")
         finally:
             sock.close()
+            is_receiving = False
+            
+        #If paused skip processing
+        if not tracker_running_event.is_set():
+            print("Tracker paused during data collection")
+            time.sleep(1)
+            continue
+            
+        if collected_messages:
+            is_processing = True
+            print(f"Processing {len(collected_messages)} ADSB messages")
+            
+            #Group by ICAO code to avoid processing the same plane multiple times
+            planes_by_icao = {}
+            for plane_data in collected_messages:
+                planes_by_icao[plane_data['icao']] = plane_data
+                
+            for icao, plane_data in planes_by_icao.items():
+                # Check for pause during processing
+                if not tracker_running_event.is_set():
+                    print("Tracker paused during processing")
+                    is_processing = False
+                    break
+                    
+                try:
+                    #Call API to get aircraft details
+                    url = f"https://hexdb.io/api/v1/aircraft/{icao}"
+                    response = requests.get(url, timeout=5)
+                    
+                    if response.status_code == 200:
+                        api_data = response.json()
+                        manufacturer = clean_string(str(api_data.get("Manufacturer", "-")))
+                        registration = clean_string(str(api_data.get("Registration", "-")))
+                        owner = clean_string(str(api_data.get("RegisteredOwners", "-")))
+                        model = clean_string(str(api_data.get("Type", "-")))
+                        
+                        if manufacturer == "Avions de Transport Regional":
+                            manufacturer = "ATR"
+                        elif manufacturer == "Honda Aircraft Company":
+                            manufacturer = "Honda"
+                            
+                        plane_data["manufacturer"] = manufacturer
+                        plane_data["registration"] = registration
+                        plane_data["icao_type_code"] = clean_string(str(api_data.get("ICAOTypeCode", "-")))
+                        plane_data["code_mode_s"] = clean_string(str(api_data.get("ModeS", "-")))
+                        plane_data["operator_flag"] = clean_string(str(api_data.get("OperatorFlagCode", "-")))
+                        plane_data["owner"] = owner
+                        plane_data["model"] = model
+                        
+                        message_queue.put(f"{manufacturer} {model}")
+                except Exception as e:
+                    print(f"API error for {icao}: {e}")
+                    
+                #Update position data for radar display
+                lat = plane_data.get("lat")
+                lon = plane_data.get("lon")
+                
+                if lat not in [None, "-", ""] and lon not in [None, "-", ""]:
+                    plane_data["last_lat"] = float(lat)
+                    plane_data["last_lon"] = float(lon)
+                    current_time = time.time()
+                    plane_data["last_update_time"] = current_time
+                    
+                    #Update the display time when we get position data
+                    displayed_planes[icao] = {
+                        "plane_data": plane_data,
+                        "display_until": current_time + display_duration
+                    }
+                
+                #Update the plane in our active planes dict
+                active_planes[icao] = plane_data
+                
+                #Upload to Firebase
+                try:
+                    today = datetime.today().strftime("%Y-%m-%d")
+                    manufacturer = plane_data.get("manufacturer", "-")
+                    model = plane_data.get("model", "-")
+                    registration = plane_data.get("registration", "-")
+                    owner = plane_data.get("owner", "-")
+                    
+                    if manufacturer != "-" and model != "-" and registration != "-" and owner != "-":
+                        ref = db.reference(f"{today}/{manufacturer} {model} ({registration}) {owner}")
+                        
+                        current_data = ref.get()
+                        if current_data is None:
+                            plane_data["location_history"] = {}
+                            ref.set(plane_data)
+                        else:
+                            location_history = current_data.get("location_history", {})
+                            
+                            if plane_data["lat"] != "-" and plane_data["lon"] != "-":
+                                location_history[plane_data["spotted_at"]] = [plane_data["lat"], plane_data["lon"]]
+                                plane_data["location_history"] = location_history
+                            else:
+                                plane_data["location_history"] = location_history
+                                
+                            new_data = {}
+                            for key, value in plane_data.items():
+                                if key in ["last_update_time"]:  
+                                    continue
+                                current_value = current_data.get(key)
+                                if value == "-" or value == []:
+                                    new_data[key] = current_value
+                                else:
+                                    new_data[key] = value
+                            ref.set(new_data)
+                except Exception as e:
+                    print(f"Firebase upload error for {icao}: {e}")
+            
+            #Update device stats only if run is true
+            if tracker_running_event.is_set():
+                try:
+                    stats_ref = db.reference("device_stats")
+                    stats_ref.update({
+                        "cpu_temp": cpu_temp,
+                        "ram_percentage": ram_percentage,
+                        "run": run
+                    })
+                except Exception as e:
+                    print(f"Error updating device stats: {e}")
+                
+            is_processing = False
+            if tracker_running_event.is_set():
+                print("Processing complete")
+            
+        #Clean up expired planes from display 
+        current_time = time.time()
+        for icao in list(displayed_planes.keys()):
+            if displayed_planes[icao]["display_until"] < current_time:
+                del displayed_planes[icao]
 
-def add_upload_task(plane_data, cpu_temp, ram_percentage, run, active_planes, message_queue): #Starts uploading data on a seperate thread
-    global upload_threads
-    upload_threads = [t for t in upload_threads if t.is_alive()]
-
-    while len(upload_threads) >= MAX_UPLOAD_THREADS: #Wait for an available thread
         time.sleep(0.1)
-        upload_threads = [t for t in upload_threads if t.is_alive()]
+
+def start_data_cycle():
+    #Start the Firebase watching thread
+    watcher_thread = threading.Thread(target=firebase_watcher, daemon=True)
+    watcher_thread.start()
     
-    t = threading.Thread( #Upload data if a thread becomes available
-        target=upload_data, 
-        args=(plane_data, cpu_temp, ram_percentage, run, active_planes, message_queue)
-    )
-    t.daemon = True
-    t.start()
-    upload_threads.append(t)
+    #Start the data collection thread
+    data_thread = threading.Thread(target=collect_and_process_data, daemon=True)
+    data_thread.start()
 
-def start_fetching_planes(): #Starts receiving ADSB signals on a seperate thread
-    t = threading.Thread(target=fetch_planes, daemon=True)
-    t.start()
-
-def process_message_queue(): #Manages amount of messages so we only store the amount that we can display
+def process_message_queue():
     global display_messages
     
     while not message_queue.empty():
@@ -162,10 +300,11 @@ def process_message_queue(): #Manages amount of messages so we only store the am
         except queue.Empty:
             break
     
-    if len(display_messages) > 26:
-        display_messages = display_messages[-26:]
+    if len(display_messages) > 24:
+        display_messages = display_messages[-24:]
 
-image1 = pygame.image.load(os.path.join("textures", "icons", "open_menu.png")) #Load images
+#Load images
+image1 = pygame.image.load(os.path.join("textures", "icons", "open_menu.png"))
 image2 = pygame.image.load(os.path.join("textures", "icons", "close_menu.png"))
 image3 = pygame.image.load(os.path.join("textures", "icons", "zoom_in.png"))
 image4 = pygame.image.load(os.path.join("textures", "icons", "zoom_out.png"))
@@ -181,16 +320,20 @@ pause_image = image5.get_rect(topleft=(685, 415))
 resume_image = image6.get_rect(topleft=(685, 415))
 off_image = image7.get_rect(topleft=(735, 415))
 
-def main(): #Main loop
+def main():
     global cpu_temp
     global ram_percentage
     global run
     start_time = time.time()
 
-    start_fetching_planes() #Start receiving ADSB signals
+    #Check run status and start threads
+    check_run_status()
+    start_data_cycle()
+
     last_update_time = time.time()
     menu_open = False
-    range = 50 #Default range on the display
+    range = 50  
+    display_incomplete = False  
 
     while True:
         if time.time() - start_time > 1800: #Reset tracker every 30min 
@@ -203,7 +346,6 @@ def main(): #Main loop
             cpu_temp = int(temp.read()) / 1000 
 
         mouse_x, mouse_y = pygame.mouse.get_pos() #Get mouse position
-        #print(mouse_x, mouse_y)
 
         pygame.draw.rect(window, (65, 65, 65), (0, 0, width, height)) #Draw radar display
 
@@ -231,57 +373,91 @@ def main(): #Main loop
                 if menu_open: #Menu buttons
                     if mouse_x > 585 and mouse_y > 415 and mouse_x < 625 and mouse_y < 455 and range > 25: #Decrease range button
                         range -= 25
-                    elif mouse_x > 635 and mouse_y > 415 and mouse_x < 675 and mouse_y < 455 and range < 1000: #Increase range button
+                    elif mouse_x > 635 and mouse_y > 415 and mouse_x < 675 and mouse_y < 455 and range < 400: #Increase range button
                         range += 25
                     elif mouse_x > 685 and mouse_y > 415 and mouse_x < 725 and mouse_y < 455: #Pause/resume button
                         run = not run 
-                        ref = db.reference(f"device_stats")
-                        ref.set({"run": run})
-                    elif mouse_x > 735 and mouse_y > 415 and mouse_x < 775 and mouse_y < 455: #Quit button
+                        if run:
+                            tracker_running_event.set()
+                            message_queue.put("Tracker activated via UI")
+                        else:
+                            tracker_running_event.clear()
+                            message_queue.put("Tracker paused via UI")
+                            
+                        ref = db.reference("device_stats")
+                        ref.update({"run": run})
+                        
+                    elif mouse_x > 735 and mouse_y > 415 and mouse_x < 775 and mouse_y < 455:  #Quit button
                         run = False 
-                        ref = db.reference(f"device_stats")
-                        ref.set({"run": run})
+                        tracker_running_event.clear()
+                        ref = db.reference("device_stats")
+                        ref.update({"run": run})
                         pygame.quit()
+                        exit()
 
         process_message_queue() #Handle messages   
 
-        now = time.time()
-        expired_keys = [] #Stores planes that havent been updated in th elast 30 seconds
-
-        for icao, plane in list(active_planes.items()): #For every plane
-            last_pos_update = plane.get("last_pos_update", 0) #Check if it was located in th elast 30 seconds to keep radar up to date
-
-            if now - last_pos_update > 30: #Remove planes from more than 30 seconds ago
-                expired_keys.append(icao)
-                continue
-
-            lat = plane.get("last_lat") #Check if received plane data contains coordinates
-            lon = plane.get("last_lon")
-            if lat is None or lon is None:
-                continue #If it doesnt dont display it
+        current_time = time.time()
+    
+        displayed_count = 0
+        potential_count = 0
+        
+        #Draw all planes that should be displayed
+        for icao, display_data in list(displayed_planes.items()):
+            plane = display_data["plane_data"]
             
-            owner = plane.get("owner") #Get plane's airline and model
+            lat = plane.get("last_lat")
+            lon = plane.get("last_lon")
+            
+            #Skip planes without coordinates 
+            if lat is None or lon is None:
+                continue
+                
+            potential_count += 1
+            
+            #Check if we have complete information 
+            owner = plane.get("owner", "-") 
             model = plane.get('model', '-')
-            if ("Air Force" in owner): #Highlights military planes in red
+            manufacturer = plane.get('manufacturer', '-')
+            
+            if not display_incomplete and (owner == "-" or model == "-" or manufacturer == "-"):
+                continue
+                
+            displayed_count += 1
+            
+            #Calculate fade based on time remaining
+            time_remaining = display_data["display_until"] - current_time
+            if time_remaining <= 0:
+                continue  
+                
+            fade_value = 255
+            if time_remaining < fade_duration:
+                fade_value = int(255 * (time_remaining / fade_duration))
+                if fade_value < 10: 
+                    fade_value = 10
+            
+            #Set plane rgb_val
+            if "Air Force" in owner or "Navy" in owner: #Highlights military planes in red
                 rgb_value = (255, 0, 0)
             elif "747" in model or "340" in model: #Highlights A340s and 747s in purple because theyre my favourite
                 rgb_value = (255, 0, 255)
             else:
                 rgb_value = (255, 255, 255)
 
-            try: #Draw plane on the radar
-                plane_string = f"{plane.get('manufacturer', '-') or '-'} {model}"
+            try: #Draw plane on the radar with fading
+                plane_string = f"{manufacturer or '-'} {model or '-'}"
+                owner_text = owner or "Unknown"
                 x, y = coords_to_xy(float(lat), float(lon), range)
 
-                pygame.draw.polygon(window, rgb_value, [(x, y - 2), (x + 2, y), (x, y + 2), (x - 2, y)])
-                draw_text_centered(owner, text_font3, (255, 255, 255), x, y - 9)
-                draw_text_centered(plane_string, text_font3, (255, 255, 255), x, y + 9)
-                #draw_text_centered(datetime.fromtimestamp(last_pos_update).strftime("%H:%M:%S"), text_font3, (255, 255, 255), x, y + 9)
+                temp_surface = pygame.Surface((10, 10), pygame.SRCALPHA)
+                temp_surface.fill((0, 0, 0, 0)) 
+                pygame.draw.polygon(temp_surface, (*rgb_value, fade_value), [(5, 3), (7, 5), (5, 7), (3, 5)])
+                window.blit(temp_surface, (x-5, y-5))
+
+                draw_fading_text(owner_text, text_font3, (255, 255, 255), x, y - 9, fade_value)
+                draw_fading_text(plane_string, text_font3, (255, 255, 255), x, y + 9, fade_value)
             except Exception as error:
                 print(f"Drawing error for {icao}: {error}")
-
-        for key in expired_keys: #Remove planes that havent been updated in the last 30sec
-            del active_planes[key]
         
         if menu_open: #Draw the menu
             current_time = strftime("%H:%M:%S", gmtime())   
@@ -291,12 +467,21 @@ def main(): #Main loop
             draw_text_centered(current_time, text_font2, (255, 0, 0), 675, 40)
             draw_text_centered(f"CPU:{str(round(cpu_temp))}°C  RAM:{str(ram_percentage)}%", text_font1, (255, 255, 255), 675, 75)
 
-            pygame.draw.rect(window, (255, 255, 255), (580, 90, 200, 275), 2)
+            #Show status 
+            if is_receiving:
+                status = "Receiving"
+            elif is_processing:
+                status = "Processing"
+            else:
+                status = "Idle"
+            
+            draw_text_centered(f"Status: {status}", text_font1, (255, 255, 0), 675, 100)
+            draw_text_centered(f"Displaying: {displayed_count}/{len(active_planes)}", text_font1, (255, 255, 0), 675, 125)
 
-            draw_text(f"Range: {range}KM", text_font1, (255, 255, 255), 580, 365)
+            pygame.draw.rect(window, (255, 255, 255), (580, 145, 200, 250), 2)
 
-            y = 94
-            for i, message in enumerate(display_messages):
+            y = 149
+            for i, message in enumerate(display_messages[-24:]): 
                 draw_text(str(message), text_font3, (255, 255, 255), 585, y)
                 y += 10
 
