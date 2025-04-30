@@ -138,7 +138,8 @@ def collect_and_process_data():
                     for message in messages:
                         plane_data = split_message(message)
                         if plane_data:
-                            collected_messages.append(plane_data)
+                            if plane_data["lon"] != "-" and plane_data["lat"] != "-":
+                                collected_messages.append(plane_data)
                             
                 except socket.timeout:
                     continue  
@@ -165,12 +166,11 @@ def collect_and_process_data():
                 planes_by_icao[plane_data['icao']] = plane_data
                 
             for icao, plane_data in planes_by_icao.items():
-                # Check for pause during processing
                 if not tracker_running_event.is_set():
                     print("Tracker paused during processing")
                     is_processing = False
                     break
-                    
+                #Only process the planes that have coordinates
                 try:
                     #Call API to get aircraft details
                     url = f"https://hexdb.io/api/v1/aircraft/{icao}"
@@ -200,7 +200,6 @@ def collect_and_process_data():
                 except Exception as e:
                     print(f"API error for {icao}: {e}")
                     
-                #Update position data for radar display
                 lat = plane_data.get("lat")
                 lon = plane_data.get("lon")
                 
@@ -210,13 +209,11 @@ def collect_and_process_data():
                     current_time = time.time()
                     plane_data["last_update_time"] = current_time
                     
-                    #Update the display time when we get position data
                     displayed_planes[icao] = {
                         "plane_data": plane_data,
                         "display_until": current_time + display_duration
                     }
                 
-                #Update the plane in our active planes dict
                 active_planes[icao] = plane_data
                 
                 #Upload to Firebase
@@ -444,7 +441,7 @@ def main():
             else:
                 rgb_value = (255, 255, 255)
 
-            try: #Draw plane on the radar with fading
+            try: #Draw plane on the radar with fading effect
                 plane_string = f"{manufacturer or '-'} {model or '-'}"
                 owner_text = owner or "Unknown"
                 x, y = coords_to_xy(float(lat), float(lon), range)
@@ -476,7 +473,7 @@ def main():
                 status = "Idle"
             
             draw_text_centered(f"Status: {status}", text_font1, (255, 255, 0), 675, 100)
-            draw_text_centered(f"Displaying: {displayed_count}/{len(active_planes)}", text_font1, (255, 255, 0), 675, 125)
+            draw_text_centered(f"Displaying: {displayed_count}", text_font1, (255, 255, 0), 675, 125)
 
             pygame.draw.rect(window, (255, 255, 255), (580, 145, 200, 250), 2)
 
