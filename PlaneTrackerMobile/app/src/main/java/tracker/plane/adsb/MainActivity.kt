@@ -54,8 +54,11 @@ class MainActivity : AppCompatActivity() {
                     withContext(Dispatchers.Main) {
                         try {
                             updateDeviceStats(cpuTemp, ramPercentage, runSwitch)
+                            val selectedDate = getDateFromDatePicker(datePicker)
+                            val planes = getData(selectedDate)
+                            updateRecyclerView(planes)
                         } catch (e: Exception) {
-                            Log.e("UpdateDeviceStatsError", "Error updating device stats: ${e.message}")
+                            Log.e("UpdateError", "Error updating UI: ${e.message}")
                         }
                     }
                     delay(3000)
@@ -200,7 +203,7 @@ class MainActivity : AppCompatActivity() {
             alarmManager.setRepeating(
                 AlarmManager.RTC_WAKEUP,
                 System.currentTimeMillis(),
-                2 * 60 * 1000,
+                1 * 60 * 1000,
                 pendingIntent
             )
         } catch (e: Exception) {

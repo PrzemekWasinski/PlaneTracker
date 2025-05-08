@@ -7,7 +7,7 @@ import android.content.Intent
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import java.text.SimpleDateFormat // Adjusted import for broader compatibility
+import java.text.SimpleDateFormat
 import android.os.Build
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
@@ -25,8 +25,6 @@ import android.Manifest
 import java.util.concurrent.TimeUnit
 import kotlin.math.*
 
-
-
 class NotificationReceiver : BroadcastReceiver() {
     private lateinit var fusedLocationClient: FusedLocationProviderClient
 
@@ -36,7 +34,7 @@ class NotificationReceiver : BroadcastReceiver() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 "NOTIFY_CHANNEL",
-                "Reminder Notifications",
+                "ADSB Notifications",
                 NotificationManager.IMPORTANCE_HIGH
             )
             notificationManager.createNotificationChannel(channel)
@@ -144,10 +142,10 @@ class NotificationReceiver : BroadcastReceiver() {
 
             val distance = earthRadius * c
 
-            return distance <= 8000
+            return distance <= 10_000
         }
 
-        CoroutineScope(Dispatchers.Main).launch {
+        suspend fun getPlanes(): JSONObject {
             val sdf = SimpleDateFormat("YYYY-MM-dd")
             val currentDate = sdf.format(Date())
 
@@ -173,7 +171,8 @@ class NotificationReceiver : BroadcastReceiver() {
                         val timeFormat = SimpleDateFormat("HH:mm:ss")
                         val spottedTime: Date? = try {
                             val currentDate = Date()
-                            val dateString = SimpleDateFormat("yyyy-MM-dd").format(currentDate) + " " + spottedAt
+                            val dateString =
+                                SimpleDateFormat("yyyy-MM-dd").format(currentDate) + " " + spottedAt
                             val fullFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
                             fullFormat.parse(dateString)
                         } catch (e: Exception) {
@@ -184,9 +183,11 @@ class NotificationReceiver : BroadcastReceiver() {
                             val currentDate = Date()
 
                             val timeDifferenceInMillis = currentDate.time - spottedTime.time
-                            val timeDifferenceInMinutes = TimeUnit.MILLISECONDS.toMinutes(timeDifferenceInMillis)
+                            val timeDifferenceInMinutes =
+                                TimeUnit.MILLISECONDS.toMinutes(timeDifferenceInMillis)
 
-                            if (checkIfNear(userLat, userLon, planeLat.toDouble(), planeLon.toDouble()) && timeDifferenceInMinutes <= 2) {
+                            if (checkIfNear(userLat, userLon, planeLat.toDouble(), planeLon.toDouble()) &&
+                                timeDifferenceInMinutes <= 1) {
                                 notificationText += plane.getJSONObject(planeInfo)
                                     .getString("manufacturer") + " " + plane.getJSONObject(planeInfo)
                                     .getString("model") + ", "
@@ -199,13 +200,35 @@ class NotificationReceiver : BroadcastReceiver() {
                 }
             }
 
-            if (planeCounter > 0) {
+            if (userLat == 0.0 || userLon == 0.0) {
+                notificationText = "Invalid user coordinates"
+                planeCounter++
+            }
+
+            if (notificationText.isEmpty()) {
+                notificationText = "No planes found"
+            }
+
+            val json = JSONObject()
+
+            json.put("count", planeCounter)
+            json.put("text", notificationText)
+            json.put("lat", userLat)
+            json.put("lon", userLon)
+
+            return json
+        }
+
+        CoroutineScope(Dispatchers.Main).launch {
+            val planeData = getPlanes()
+
+            if (planeData.getInt("count") > 0) {
                 val notification: Notification =
                     NotificationCompat.Builder(context, "NOTIFY_CHANNEL")
-                        .setContentTitle("$planeCounter Planes Found")
-                        .setContentText(notificationText)
-                        .setSmallIcon(android.R.drawable.ic_notification_overlay)
-                        .setPriority(NotificationCompat.PRIORITY_HIGH)
+                        .setContentTitle("${planeData.getString("count")} Planes Found")
+                        .setContentText(planeData.getString("text"))
+                        .setSmallIcon(R.drawable.ic_plane_notification)
+                        .setPriority(NotificationCompat.PRIORITY_MAX)
                         .build()
 
                 notificationManager.notify(1, notification)
