@@ -46,22 +46,18 @@ class MainActivity : AppCompatActivity() {
         adapter = RecyclerAdapter()
         recyclerView.adapter = adapter
 
-        scheduleNotification()
-
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 while (true) {
                     withContext(Dispatchers.Main) {
                         try {
                             updateDeviceStats(cpuTemp, ramPercentage, runSwitch)
-                            val selectedDate = getDateFromDatePicker(datePicker)
-                            val planes = getData(selectedDate)
-                            updateRecyclerView(planes)
                         } catch (e: Exception) {
                             Log.e("UpdateError", "Error updating UI: ${e.message}")
                         }
+
                     }
-                    delay(3000)
+                    delay(5000)
                 }
             } catch (e: Exception) {
                 Log.e("CoroutineError", "Coroutine error: ${e.message}")
@@ -76,7 +72,7 @@ class MainActivity : AppCompatActivity() {
             val selectedDate = getDateFromDatePicker(datePicker)
             CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    val jsonArray = getData(selectedDate)
+                    val jsonArray = getData(selectedDate, runSwitch)
                     withContext(Dispatchers.Main) {
                         updateRecyclerView(jsonArray)
                     }
@@ -90,7 +86,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
                 val currentDate = sdf.format(Date())
-                val jsonArray = getData(currentDate)
+                val jsonArray = getData(currentDate, runSwitch)
                 withContext(Dispatchers.Main) {
                     updateRecyclerView(jsonArray)
                 }
@@ -98,6 +94,8 @@ class MainActivity : AppCompatActivity() {
                 Log.e("InitialLoadError", "Error loading initial data: ${e.message}")
             }
         }
+
+        scheduleNotification()
     }
 
     private suspend fun updateDeviceStats(cpuTemp: TextView, ramPercentage: TextView, runSwitch: Switch) {
@@ -140,7 +138,6 @@ class MainActivity : AppCompatActivity() {
 
         } catch (error: Exception) {
             Log.e("UpdateStatsError", "Error fetching stats: ${error.message}")
-            // Put default values in case of error
             json.put("cpuTemp", "N/A")
             json.put("ramUsage", "N/A")
             json.put("run", false)
@@ -148,45 +145,64 @@ class MainActivity : AppCompatActivity() {
         return json
     }
 
-    private suspend fun getData(path: String): JSONArray {
-        val database = FirebaseDatabase.getInstance()
-        val reference = database.getReference(path)
-
+    private suspend fun getData(path: String, runSwitch: Switch): JSONArray {
         val jsonArray = JSONArray()
-        try {
-            val snapshot = reference.get().await()
-            if (!snapshot.exists()) return jsonArray
+        if (runSwitch.isChecked) {
+            val database = FirebaseDatabase.getInstance()
+            val reference = database.getReference(path)
+            try {
+                val snapshot = reference.get().await()
+                if (!snapshot.exists()) return jsonArray
 
-            for (i in snapshot.children) {
-                try {
-                    val key = i.key ?: continue
+                for (i in snapshot.children) {
+                    try {
+                        val key = i.key ?: continue
 
-                    val planeJson = JSONObject()
-                    planeJson.put("altitude", i.child("altitude").value?.toString() ?: "N/A")
-                    planeJson.put("code_mode_s", i.child("code_mode_s").value?.toString() ?: "N/A")
-                    planeJson.put("icao", i.child("icao").value?.toString() ?: "N/A")
-                    planeJson.put("icao_type_code", i.child("icao_type_code").value?.toString() ?: "N/A")
-                    planeJson.put("lat", i.child("lat").value?.toString() ?: "N/A")
-                    planeJson.put("lon", i.child("lon").value?.toString() ?: "N/A")
-                    planeJson.put("manufacturer", i.child("manufacturer").value?.toString() ?: "N/A")
-                    planeJson.put("model", i.child("model").value?.toString() ?: "N/A")
-                    planeJson.put("operator_flag", i.child("operator_flag").value?.toString() ?: "N/A")
-                    planeJson.put("owner", i.child("owner").value?.toString() ?: "N/A")
-                    planeJson.put("registration", i.child("registration").value?.toString() ?: "N/A")
-                    planeJson.put("speed", i.child("speed").value?.toString() ?: "N/A")
-                    planeJson.put("spotted_at", i.child("spotted_at").value?.toString() ?: "N/A")
-                    planeJson.put("track", i.child("track").value?.toString() ?: "N/A")
+                        val planeJson = JSONObject()
+                        planeJson.put("altitude", i.child("altitude").value?.toString() ?: "N/A")
+                        planeJson.put(
+                            "code_mode_s",
+                            i.child("code_mode_s").value?.toString() ?: "N/A"
+                        )
+                        planeJson.put("icao", i.child("icao").value?.toString() ?: "N/A")
+                        planeJson.put(
+                            "icao_type_code",
+                            i.child("icao_type_code").value?.toString() ?: "N/A"
+                        )
+                        planeJson.put("lat", i.child("lat").value?.toString() ?: "N/A")
+                        planeJson.put("lon", i.child("lon").value?.toString() ?: "N/A")
+                        planeJson.put(
+                            "manufacturer",
+                            i.child("manufacturer").value?.toString() ?: "N/A"
+                        )
+                        planeJson.put("model", i.child("model").value?.toString() ?: "N/A")
+                        planeJson.put(
+                            "operator_flag",
+                            i.child("operator_flag").value?.toString() ?: "N/A"
+                        )
+                        planeJson.put("owner", i.child("owner").value?.toString() ?: "N/A")
+                        planeJson.put(
+                            "registration",
+                            i.child("registration").value?.toString() ?: "N/A"
+                        )
+                        planeJson.put("speed", i.child("speed").value?.toString() ?: "N/A")
+                        planeJson.put(
+                            "spotted_at",
+                            i.child("spotted_at").value?.toString() ?: "N/A"
+                        )
+                        planeJson.put("track", i.child("track").value?.toString() ?: "N/A")
 
-                    val jsonObject = JSONObject()
-                    jsonObject.put(key, planeJson)
-                    jsonArray.put(jsonObject)
-                } catch (e: Exception) {
-                    Log.e("DataProcessingError", "Error processing plane data: ${e.message}")
-                    continue
+                        val jsonObject = JSONObject()
+                        jsonObject.put(key, planeJson)
+                        jsonArray.put(jsonObject)
+                    } catch (e: Exception) {
+                        Log.e("DataProcessingError", "Error processing plane data: ${e.message}")
+                        continue
+                    }
                 }
+            } catch (error: Exception) {
+                Log.e("GetDataError", "Error fetching data: ${error.message}")
             }
-        } catch (error: Exception) {
-            Log.e("GetDataError", "Error fetching data: ${error.message}")
         }
 
         return jsonArray

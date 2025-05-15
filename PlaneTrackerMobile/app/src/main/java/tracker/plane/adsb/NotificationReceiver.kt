@@ -22,6 +22,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Date
 import android.Manifest
+import android.util.Log
+import android.widget.Switch
 import java.util.concurrent.TimeUnit
 import kotlin.math.*
 
@@ -41,59 +43,69 @@ class NotificationReceiver : BroadcastReceiver() {
         }
 
         suspend fun getData(path: String): JSONArray {
-            fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
             val database = FirebaseDatabase.getInstance()
-            val reference = database.getReference(path)
-
-            val jsonArray = JSONArray()
+            var reference = database.getReference("device_stats")
+            var run = false
 
             try {
-                val snapshot = reference.get().await()
-
-                if (!snapshot.exists()) {
-                    return jsonArray
-                }
-
-                for (i in snapshot.children) {
-                    val key = i.key
-
-                    val altitude = i.child("altitude").value ?: "N/A"
-                    val code_mode_s = i.child("code_mode_s").value ?: "N/A"
-                    val icao = i.child("icao").value ?: "N/A"
-                    val icao_type_code = i.child("icao_type_code").value ?: "N/A"
-                    val lat = i.child("lat").value ?: "N/A"
-                    val lon = i.child("lon").value ?: "N/A"
-                    val manufacturer = i.child("manufacturer").value ?: "N/A"
-                    val model = i.child("model").value ?: "N/A"
-                    val operator_flag = i.child("operator_flag").value ?: "N/A"
-                    val owner = i.child("owner").value ?: "N/A"
-                    val registration = i.child("registration").value ?: "N/A"
-                    val speed = i.child("speed").value ?: "N/A"
-                    val spotted_at = i.child("spotted_at").value ?: "N/A"
-                    val track = i.child("track").value ?: "N/A"
-
-                    val planeJson = JSONObject()
-                    planeJson.put("altitude", altitude)
-                    planeJson.put("code_mode_s", code_mode_s)
-                    planeJson.put("icao", icao)
-                    planeJson.put("icao_type_code", icao_type_code)
-                    planeJson.put("lat", lat)
-                    planeJson.put("lon", lon)
-                    planeJson.put("manufacturer", manufacturer)
-                    planeJson.put("model", model)
-                    planeJson.put("operator_flag", operator_flag)
-                    planeJson.put("owner", owner)
-                    planeJson.put("registration", registration)
-                    planeJson.put("speed", speed)
-                    planeJson.put("spotted_at", spotted_at)
-                    planeJson.put("track", track)
-
-                    val jsonObject = JSONObject()
-                    jsonObject.put(key, planeJson)
-                    jsonArray.put(jsonObject)
-                }
+                val stats = reference.get().await()
+                run = stats.child("run").value as? Boolean ?: false
             } catch (error: Exception) {
-                error.printStackTrace()
+                Log.e("Error", "Error fetching run status")
+            }
+            fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
+            val jsonArray = JSONArray()
+
+            if (run) {
+                try {
+                    reference = database.getReference(path)
+                    val snapshot = reference.get().await()
+
+                    if (!snapshot.exists()) {
+                        return jsonArray
+                    }
+
+                    for (i in snapshot.children) {
+                        val key = i.key
+
+                        val altitude = i.child("altitude").value ?: "N/A"
+                        val code_mode_s = i.child("code_mode_s").value ?: "N/A"
+                        val icao = i.child("icao").value ?: "N/A"
+                        val icao_type_code = i.child("icao_type_code").value ?: "N/A"
+                        val lat = i.child("lat").value ?: "N/A"
+                        val lon = i.child("lon").value ?: "N/A"
+                        val manufacturer = i.child("manufacturer").value ?: "N/A"
+                        val model = i.child("model").value ?: "N/A"
+                        val operator_flag = i.child("operator_flag").value ?: "N/A"
+                        val owner = i.child("owner").value ?: "N/A"
+                        val registration = i.child("registration").value ?: "N/A"
+                        val speed = i.child("speed").value ?: "N/A"
+                        val spotted_at = i.child("spotted_at").value ?: "N/A"
+                        val track = i.child("track").value ?: "N/A"
+
+                        val planeJson = JSONObject()
+                        planeJson.put("altitude", altitude)
+                        planeJson.put("code_mode_s", code_mode_s)
+                        planeJson.put("icao", icao)
+                        planeJson.put("icao_type_code", icao_type_code)
+                        planeJson.put("lat", lat)
+                        planeJson.put("lon", lon)
+                        planeJson.put("manufacturer", manufacturer)
+                        planeJson.put("model", model)
+                        planeJson.put("operator_flag", operator_flag)
+                        planeJson.put("owner", owner)
+                        planeJson.put("registration", registration)
+                        planeJson.put("speed", speed)
+                        planeJson.put("spotted_at", spotted_at)
+                        planeJson.put("track", track)
+
+                        val jsonObject = JSONObject()
+                        jsonObject.put(key, planeJson)
+                        jsonArray.put(jsonObject)
+                    }
+                } catch (error: Exception) {
+                    error.printStackTrace()
+                }
             }
 
             return jsonArray
@@ -142,7 +154,7 @@ class NotificationReceiver : BroadcastReceiver() {
 
             val distance = earthRadius * c
 
-            return distance <= 10_000
+            return distance <= 8_000
         }
 
         suspend fun getPlanes(): JSONObject {
