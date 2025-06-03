@@ -5,7 +5,7 @@ is then uploaded to Firebase and retrieved by a Kotlin app running on my phone w
 me see how the raspberry pi is running.
 
 # Current Setup
-![20250327_221017(1)](https://github.com/user-attachments/assets/880dfb90-bb74-4b0d-a955-8516e61e497f)
+![pi](https://github.com/user-attachments/assets/135cd4fe-5195-4ed9-b3ac-d7d491639194)
 
 Here is the Raspberry Pi connected to a screen which displays the device stats and the plane data it receives.
 
