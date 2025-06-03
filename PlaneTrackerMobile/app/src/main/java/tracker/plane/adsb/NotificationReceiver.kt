@@ -24,6 +24,10 @@ import java.util.Date
 import android.Manifest
 import android.util.Log
 import android.widget.Switch
+import java.time.LocalTime
+import java.util.Calendar
+import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 import kotlin.math.*
 
@@ -42,6 +46,26 @@ class NotificationReceiver : BroadcastReceiver() {
             notificationManager.createNotificationChannel(channel)
         }
 
+        fun checkIfNear(userLat: Double, userLon: Double, targetLat: Double, targetLon: Double): Boolean {
+            val earthRadius = 6371000.0
+
+            val userLatRad = Math.toRadians(userLat)
+            val userLonRad = Math.toRadians(userLon)
+            val targetLatRad = Math.toRadians(targetLat)
+            val targetLonRad = Math.toRadians(targetLon)
+
+            val deltaLat = targetLatRad - userLatRad
+            val deltaLon = targetLonRad - userLonRad
+
+            //The math was made by chatgpt because i suck at math
+            val a = sin(deltaLat / 2).pow(2) + cos(userLatRad) * cos(targetLatRad) * sin(deltaLon / 2).pow(2)
+            val c = 2 * atan2(sqrt(a), sqrt(1 - a))
+
+            val distance = earthRadius * c
+
+            return distance <= 8_000
+        }
+
         suspend fun getData(path: String): JSONArray {
             val database = FirebaseDatabase.getInstance()
             var reference = database.getReference("device_stats")
@@ -53,11 +77,12 @@ class NotificationReceiver : BroadcastReceiver() {
             } catch (error: Exception) {
                 Log.e("Error", "Error fetching run status")
             }
+
             fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
             val jsonArray = JSONArray()
 
-            if (run) {
-                try {
+            try {
+                if (run) {
                     reference = database.getReference(path)
                     val snapshot = reference.get().await()
 
@@ -65,47 +90,78 @@ class NotificationReceiver : BroadcastReceiver() {
                         return jsonArray
                     }
 
+                    // Get current device location
+                    val location = fusedLocationClient.lastLocation.await()
+                    val userLat = location.latitude
+                    val userLon = location.longitude
+
+                    // Setup time formatter
+                    val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+                    timeFormat.timeZone =
+                        TimeZone.getDefault() // or use UTC if all times are stored in UTC
+
+                    val now = Date()
+                    val recent = 1 * 60 * 1000
+
                     for (i in snapshot.children) {
                         val key = i.key
 
-                        val altitude = i.child("altitude").value ?: "N/A"
-                        val code_mode_s = i.child("code_mode_s").value ?: "N/A"
-                        val icao = i.child("icao").value ?: "N/A"
-                        val icao_type_code = i.child("icao_type_code").value ?: "N/A"
-                        val lat = i.child("lat").value ?: "N/A"
-                        val lon = i.child("lon").value ?: "N/A"
-                        val manufacturer = i.child("manufacturer").value ?: "N/A"
-                        val model = i.child("model").value ?: "N/A"
-                        val operator_flag = i.child("operator_flag").value ?: "N/A"
-                        val owner = i.child("owner").value ?: "N/A"
-                        val registration = i.child("registration").value ?: "N/A"
-                        val speed = i.child("speed").value ?: "N/A"
-                        val spotted_at = i.child("spotted_at").value ?: "N/A"
-                        val track = i.child("track").value ?: "N/A"
+                        val lat = i.child("lat").value?.toString()
+                        val lon = i.child("lon").value?.toString()
+                        val spottedAt = i.child("spotted_at").value?.toString()
 
-                        val planeJson = JSONObject()
-                        planeJson.put("altitude", altitude)
-                        planeJson.put("code_mode_s", code_mode_s)
-                        planeJson.put("icao", icao)
-                        planeJson.put("icao_type_code", icao_type_code)
-                        planeJson.put("lat", lat)
-                        planeJson.put("lon", lon)
-                        planeJson.put("manufacturer", manufacturer)
-                        planeJson.put("model", model)
-                        planeJson.put("operator_flag", operator_flag)
-                        planeJson.put("owner", owner)
-                        planeJson.put("registration", registration)
-                        planeJson.put("speed", speed)
-                        planeJson.put("spotted_at", spotted_at)
-                        planeJson.put("track", track)
+                        if (lat == null || lon == null || spottedAt == null) continue
 
-                        val jsonObject = JSONObject()
-                        jsonObject.put(key, planeJson)
-                        jsonArray.put(jsonObject)
+                        // Check if nearby
+                        val isNear = checkIfNear(userLat, userLon, lat.toDouble(), lon.toDouble())
+
+                        // Parse spotted_at time
+                        val spottedDate: Date? = try {
+                            timeFormat.parse(spottedAt)
+                        } catch (e: Exception) {
+                            null
+                        }
+
+                        // Calculate whether time difference is within 2 minutes
+                        val isTimeClose = spottedDate?.let {
+                            val nowCal = Calendar.getInstance()
+                            val spottedCal = Calendar.getInstance().apply {
+                                time = it
+                                set(Calendar.YEAR, nowCal.get(Calendar.YEAR))
+                                set(Calendar.MONTH, nowCal.get(Calendar.MONTH))
+                                set(Calendar.DAY_OF_MONTH, nowCal.get(Calendar.DAY_OF_MONTH))
+                            }
+
+                            val diff = kotlin.math.abs(now.time - spottedCal.time.time)
+                            diff <= recent
+                        } ?: false
+
+                        if (isNear && isTimeClose) {
+                            val planeJson = JSONObject().apply {
+                                put("altitude", i.child("altitude").value ?: "N/A")
+                                put("code_mode_s", i.child("code_mode_s").value ?: "N/A")
+                                put("icao", i.child("icao").value ?: "N/A")
+                                put("icao_type_code", i.child("icao_type_code").value ?: "N/A")
+                                put("lat", lat)
+                                put("lon", lon)
+                                put("manufacturer", i.child("manufacturer").value ?: "N/A")
+                                put("model", i.child("model").value ?: "N/A")
+                                put("operator_flag", i.child("operator_flag").value ?: "N/A")
+                                put("owner", i.child("owner").value ?: "N/A")
+                                put("registration", i.child("registration").value ?: "N/A")
+                                put("speed", i.child("speed").value ?: "N/A")
+                                put("spotted_at", spottedAt)
+                                put("track", i.child("track").value ?: "N/A")
+                            }
+
+                            val jsonObject = JSONObject()
+                            jsonObject.put(key, planeJson)
+                            jsonArray.put(jsonObject)
+                        }
                     }
-                } catch (error: Exception) {
-                    error.printStackTrace()
                 }
+            } catch (error: Exception) {
+                error.printStackTrace()
             }
 
             return jsonArray
@@ -137,26 +193,6 @@ class NotificationReceiver : BroadcastReceiver() {
             }
         }
 
-        fun checkIfNear(userLat: Double, userLon: Double, targetLat: Double, targetLon: Double): Boolean {
-            val earthRadius = 6371000.0
-
-            val userLatRad = Math.toRadians(userLat)
-            val userLonRad = Math.toRadians(userLon)
-            val targetLatRad = Math.toRadians(targetLat)
-            val targetLonRad = Math.toRadians(targetLon)
-
-            val deltaLat = targetLatRad - userLatRad
-            val deltaLon = targetLonRad - userLonRad
-
-            //The math was made by chatgpt because i suck at math
-            val a = sin(deltaLat / 2).pow(2) + cos(userLatRad) * cos(targetLatRad) * sin(deltaLon / 2).pow(2)
-            val c = 2 * atan2(sqrt(a), sqrt(1 - a))
-
-            val distance = earthRadius * c
-
-            return distance <= 8_000
-        }
-
         suspend fun getPlanes(): JSONObject {
             val sdf = SimpleDateFormat("YYYY-MM-dd")
             val currentDate = sdf.format(Date())
@@ -175,38 +211,10 @@ class NotificationReceiver : BroadcastReceiver() {
                     val plane = jsonArray.getJSONObject(i)
                     val planeInfo = plane.keys().next()
 
-                    val planeLat = plane.getJSONObject(planeInfo).getString("lat")
-                    val planeLon = plane.getJSONObject(planeInfo).getString("lon")
-                    val spottedAt = plane.getJSONObject(planeInfo).getString("spotted_at")
-
-                    if (planeLat != "-" && planeLon != "-" && planeLat != "N/A" && planeLon != "N/A") {
-                        val timeFormat = SimpleDateFormat("HH:mm:ss")
-                        val spottedTime: Date? = try {
-                            val currentDate = Date()
-                            val dateString =
-                                SimpleDateFormat("yyyy-MM-dd").format(currentDate) + " " + spottedAt
-                            val fullFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-                            fullFormat.parse(dateString)
-                        } catch (e: Exception) {
-                            null
-                        }
-
-                        if (spottedTime != null) {
-                            val currentDate = Date()
-
-                            val timeDifferenceInMillis = currentDate.time - spottedTime.time
-                            val timeDifferenceInMinutes =
-                                TimeUnit.MILLISECONDS.toMinutes(timeDifferenceInMillis)
-
-                            if (checkIfNear(userLat, userLon, planeLat.toDouble(), planeLon.toDouble()) &&
-                                timeDifferenceInMinutes <= 1) {
-                                notificationText += plane.getJSONObject(planeInfo)
-                                    .getString("manufacturer") + " " + plane.getJSONObject(planeInfo)
-                                    .getString("model") + ", "
-                                planeCounter++
-                            }
-                        }
-                    }
+                    notificationText += plane.getJSONObject(planeInfo)
+                        .getString("manufacturer") + " " + plane.getJSONObject(planeInfo)
+                        .getString("model") + ", "
+                    planeCounter++
                 } catch (e: Exception) {
                     notificationText += e.message
                 }
