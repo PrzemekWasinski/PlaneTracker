@@ -101,7 +101,7 @@ class NotificationReceiver : BroadcastReceiver() {
                         TimeZone.getDefault() // or use UTC if all times are stored in UTC
 
                     val now = Date()
-                    val recent = 1 * 60 * 1000
+                    val recent = 2 * 60 * 1000
 
                     for (i in snapshot.children) {
                         val key = i.key
@@ -193,11 +193,25 @@ class NotificationReceiver : BroadcastReceiver() {
             }
         }
 
-        suspend fun getPlanes(): JSONObject {
+        fun getPath(): String {
             val sdf = SimpleDateFormat("YYYY-MM-dd")
             val currentDate = sdf.format(Date())
+            val calendar = Calendar.getInstance()
 
-            val jsonArray = getData(currentDate)
+            val minutes = calendar.get(Calendar.MINUTE)
+            val roundedMinutes = (minutes / 10) * 10
+            calendar.set(Calendar.MINUTE, roundedMinutes)
+            calendar.set(Calendar.SECOND, 0)
+            calendar.set(Calendar.MILLISECOND, 0)
+
+            val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+            val roundedTime = timeFormat.format(calendar.time)
+
+            return "/$currentDate/$roundedTime"
+        }
+
+        suspend fun getPlanes(): JSONObject {
+            val jsonArray = getData(getPath())
             var notificationText = ""
             var planeCounter = 0
 

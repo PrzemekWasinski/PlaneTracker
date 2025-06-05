@@ -223,9 +223,13 @@ def collect_and_process_data():
                     model = plane_data.get("model", "-")
                     registration = plane_data.get("registration", "-")
                     owner = plane_data.get("owner", "-")
+
+                    min = strftime("%M", gmtime())
+                    hour = strftime("%H", gmtime())
+                    time_10 = f"{hour}:{min[:-1] + "0"}"
                     
                     if manufacturer != "-" and model != "-" and registration != "-" and owner != "-":
-                        ref = db.reference(f"{today}/{manufacturer} {model} ({registration}) {owner}")
+                        ref = db.reference(f"{today}/{time_10}/{manufacturer}-{model}-({registration})-{owner}")
                         
                         current_data = ref.get()
                         if current_data is None:
