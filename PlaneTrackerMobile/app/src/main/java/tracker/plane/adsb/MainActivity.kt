@@ -72,7 +72,18 @@ class MainActivity : AppCompatActivity() {
             val selectedDate = getDateFromDatePicker(datePicker)
             CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    val jsonArray = getData(selectedDate, runSwitch)
+                    val calendar = Calendar.getInstance()
+
+                    val minutes = calendar.get(Calendar.MINUTE)
+                    val roundedMinutes = (minutes / 10) * 10
+                    calendar.set(Calendar.MINUTE, roundedMinutes)
+                    calendar.set(Calendar.SECOND, 0)
+                    calendar.set(Calendar.MILLISECOND, 0)
+
+                    val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+                    val roundedTime = timeFormat.format(calendar.time)
+
+                    val jsonArray = getData("$selectedDate/$roundedTime", runSwitch)
                     withContext(Dispatchers.Main) {
                         updateRecyclerView(jsonArray)
                     }
@@ -86,7 +97,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
                 val currentDate = sdf.format(Date())
-                val jsonArray = getData(currentDate, runSwitch)
+                val jsonArray = getData(getPath(), runSwitch)
                 withContext(Dispatchers.Main) {
                     updateRecyclerView(jsonArray)
                 }
@@ -143,6 +154,23 @@ class MainActivity : AppCompatActivity() {
             json.put("run", false)
         }
         return json
+    }
+
+    fun getPath(): String {
+        val sdf = SimpleDateFormat("YYYY-MM-dd")
+        val currentDate = sdf.format(Date())
+        val calendar = Calendar.getInstance()
+
+        val minutes = calendar.get(Calendar.MINUTE)
+        val roundedMinutes = (minutes / 10) * 10
+        calendar.set(Calendar.MINUTE, roundedMinutes)
+        calendar.set(Calendar.SECOND, 0)
+        calendar.set(Calendar.MILLISECOND, 0)
+
+        val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+        val roundedTime = timeFormat.format(calendar.time)
+
+        return "/$currentDate/$roundedTime"
     }
 
     private suspend fun getData(path: String, runSwitch: Switch): JSONArray {
