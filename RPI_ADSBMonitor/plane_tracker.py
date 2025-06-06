@@ -7,7 +7,7 @@ import firebase_admin
 from firebase_admin import credentials, db
 import pygame
 from pygame.locals import *
-from time import gmtime, strftime
+from time import localtime, strftime
 import psutil
 import os
 import threading
@@ -224,9 +224,9 @@ def collect_and_process_data():
                     registration = plane_data.get("registration", "-")
                     owner = plane_data.get("owner", "-")
 
-                    min = strftime("%M", gmtime())
-                    hour = strftime("%H", gmtime())
-                    time_10 = f"{hour}:{min[:-1] + "0"}"
+                    min = strftime("%M", localtime())
+                    hour = strftime("%H", localtime())
+                    time_10 = f"{hour}:{min[:-1] + '0'}"
                     
                     if manufacturer != "-" and model != "-" and registration != "-" and owner != "-":
                         ref = db.reference(f"{today}/{time_10}/{manufacturer}-{model}-({registration})-{owner}")
@@ -461,7 +461,7 @@ def main():
                 print(f"Drawing error for {icao}: {error}")
         
         if menu_open: #Draw the menu
-            current_time = strftime("%H:%M:%S", gmtime())   
+            current_time = strftime("%H:%M:%S", localtime())   
 
             pygame.draw.rect(window, (0, 0, 0), (570, 10, 220, 460), 0, 5)
 
@@ -475,9 +475,17 @@ def main():
                 status = "Processing"
             else:
                 status = "Idle"
+
+            display_rgb = (255, 255, 255)
+            if displayed_count < 10:
+                display_rgb = (255, 0, 0)
+            elif displayed_count < 20:
+                display_rgb = (255, 255, 0)
+            elif displayed_count >= 20:
+                display_rgb = (0, 255, 0)
             
-            draw_text_centered(f"Status: {status}", text_font1, (255, 255, 0), 675, 100)
-            draw_text_centered(f"Displaying: {displayed_count}", text_font1, (255, 255, 0), 675, 125)
+            draw_text_centered(f"Status: {status}", text_font1, (255, 255, 255), 675, 100)
+            draw_text_centered(f"Active: {displayed_count}", text_font1, display_rgb, 675, 125)
 
             pygame.draw.rect(window, (255, 255, 255), (580, 145, 200, 250), 2)
 

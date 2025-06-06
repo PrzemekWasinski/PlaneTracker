@@ -2,7 +2,7 @@ import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import db
 
-SERVICE_ACCOUNT_KEY_PATH = './flight-key.json'
+SERVICE_ACCOUNT_KEY_PATH = './flightkey.json'
 DATABASE_URL = 'https://rpi-flight-tracker-default-rtdb.europe-west1.firebasedatabase.app/'
 
 def initialize_firebase():
@@ -13,12 +13,11 @@ def initialize_firebase():
 
 def clear_path(path='/'):
     ref = db.reference(path)
-    ref.set()
+    ref.set(0)
     print(f"Cleared data at path: {path}")
 
 if __name__ == "__main__":
     initialize_firebase()
-
-    # Modify this to the path you want to clear, or leave as '/' to clear the whole DB
-    path_to_clear = '/'  # e.g., '/users' or '/' to clear everything
+    
+    path_to_clear = '/'  
     clear_path(path_to_clear)
