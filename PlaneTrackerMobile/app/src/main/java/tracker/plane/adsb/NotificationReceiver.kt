@@ -63,7 +63,7 @@ class NotificationReceiver : BroadcastReceiver() {
 
             val distance = earthRadius * c
 
-            return distance <= 8_000
+            return distance <= 15_000
         }
 
         suspend fun getData(path: String): JSONArray {

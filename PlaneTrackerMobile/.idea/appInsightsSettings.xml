@@ -8,10 +8,10 @@
             <InsightsFilterSettings>
               <option name="connection">
                 <ConnectionSetting>
-                  <option name="appId" value="PLACEHOLDER" />
-                  <option name="mobileSdkAppId" value="" />
-                  <option name="projectId" value="" />
-                  <option name="projectNumber" value="" />
+                  <option name="appId" value="tracker.plane.adsb" />
+                  <option name="mobileSdkAppId" value="1:463800203443:android:c9528face9d53e01a7d8c6" />
+                  <option name="projectId" value="rpi-flight-tracker" />
+                  <option name="projectNumber" value="463800203443" />
                 </ConnectionSetting>
               </option>
               <option name="signal" value="SIGNAL_UNSPECIFIED" />

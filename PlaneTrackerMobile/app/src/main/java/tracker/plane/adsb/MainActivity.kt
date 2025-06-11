@@ -247,7 +247,7 @@ class MainActivity : AppCompatActivity() {
             alarmManager.setRepeating(
                 AlarmManager.RTC_WAKEUP,
                 System.currentTimeMillis(),
-                15 * 60 * 1000,
+                10 * 60 * 1000,
                 pendingIntent
             )
         } catch (e: Exception) {

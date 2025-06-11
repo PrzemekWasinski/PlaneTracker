@@ -11,6 +11,8 @@ import requests
 import math
 import re
 import concurrent.futures
+import json
+from time import strftime, localtime
 
 def restart_script(): #Function to restart the script
     print("Restarting script")
@@ -74,4 +76,35 @@ def split_message(message):
 
 def clean_string(string):
     return re.sub(r"[\/\\\.,:]", " ", string)
+
+def get_stats():
+    today = datetime.today().strftime("%Y-%m-%d")
+    try:
+        with open(f"./stats_history/{today}.json", 'r') as f:
+            data = json.load(f)
+
+        top_model = max(data['models'].items(), key=lambda x: x[1]) if data['models'] else (None, 0)
+        top_manufacturer = max(data['manufacturers'].items(), key=lambda x: x[1]) if data['manufacturers'] else (None, 0)
+        top_airline = max(data['airlines'].items(), key=lambda x: x[1]) if data['airlines'] else (None, 0)
+        
+        return {
+            'total': data['total'],
+            'top_model': {'name': top_model[0], 'count': top_model[1]},
+            'top_manufacturer': {'name': top_manufacturer[0], 'count': top_manufacturer[1]},
+            'top_airline': {'name': top_airline[0], 'count': top_airline[1]},
+            "last_updated": strftime("%H:%M:%S", localtime())
+        }
+        
+    except FileNotFoundError:
+        return {
+            'total': 0,
+            'top_model': {'name': None, 'count': 0},
+            'top_manufacturer': {'name': None, 'count': 0},
+            'top_airline': {'name': None, 'count': 0},
+            "last_updated": strftime("%H:%M:%S", localtime())
+        }
+    except json.JSONDecodeError:
+        raise ValueError("Invalid JSON file format")
+    except KeyError:
+        raise ValueError("File exists but doesn't have the expected structure")
 

@@ -16,7 +16,8 @@ import queue
 import requests
 import math
 import re
-from functions import restart_script, connect, coords_to_xy, split_message, clean_string
+import json
+from functions import restart_script, connect, coords_to_xy, split_message, clean_string, get_stats
 
 if not firebase_admin._apps: #Initialise Firebase
     cred = credentials.Certificate("./rpi-flight-tracker-firebase-adminsdk-fbsvc-a6afd2b5b0.json")
@@ -218,6 +219,54 @@ def collect_and_process_data():
                 
                 #Upload to Firebase
                 try:
+
+                    today = datetime.today().strftime("%Y-%m-%d")
+                    path = f'./stats_history/{today}.json'
+
+                    # Initialize file if it doesn't exist
+                    if not os.path.exists(path):
+                        with open(path, "w") as outfile:
+                            json.dump({
+                                "total": 0, 
+                                "models": {}, 
+                                "manufacturers": {}, 
+                                "airlines": {}
+                            }, outfile)
+
+                    # Read existing data
+                    with open(path, 'r') as openfile:
+                        json_object = json.load(openfile)
+
+                    # Update counters
+                    json_object["total"] += 1
+
+                    # Update model count
+                    model = plane_data.get("model")
+                    if model in json_object["models"]:
+                        json_object["models"][model] += 1
+                    else:
+                        json_object["models"][model] = 1
+
+                    # Update manufacturer count
+                    manufacturer = plane_data.get("manufacturer")
+                    if manufacturer in json_object["manufacturers"]:
+                        json_object["manufacturers"][manufacturer] += 1
+                    else:
+                        json_object["manufacturers"][manufacturer] = 1
+
+                    # Update airline count
+                    owner = plane_data.get("owner")
+                    if owner in json_object["airlines"]:
+                        json_object["airlines"][owner] += 1
+                    else:
+                        json_object["airlines"][owner] = 1
+
+                    # Write back to file
+                    with open(path, "w") as outfile:
+                        json.dump(json_object, outfile)
+
+
+
                     today = datetime.today().strftime("%Y-%m-%d")
                     manufacturer = plane_data.get("manufacturer", "-")
                     model = plane_data.get("model", "-")
@@ -337,7 +386,10 @@ def main():
     display_incomplete = False  
 
     while True:
-        if time.time() - start_time > 1800: #Reset tracker every 30min 
+        if time.time() - start_time > 1800: #Reset tracker every 30min and upload todays stats to firebase
+            today = datetime.today().strftime("%Y-%m-%d")
+            ref = db.reference(f"{today}/stats")
+            ref.set(get_stats())
             print("Restarting plane tracker...")
             restart_script()
 
