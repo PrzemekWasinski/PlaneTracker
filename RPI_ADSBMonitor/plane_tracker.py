@@ -220,7 +220,6 @@ def collect_and_process_data():
                 
                 #Upload to Firebase
                 try:
-
                     today = datetime.today().strftime("%Y-%m-%d")
                     stats_dir = './stats_history'
                     csv_path = os.path.join(stats_dir, f'{today}.csv')
@@ -248,36 +247,39 @@ def collect_and_process_data():
                             existing_rows = []
                             existing_icaos = set()
 
-                    # Add new row
+                    # Prepare row data
+                    manufacturer = plane_data.get('manufacturer', '').strip()
+                    model = plane_data.get('model', '').strip()
+                    full_model = f"{manufacturer} {model}".strip()
+
                     row_data = {
                         'icao': icao,
-                        'manufacturer': plane_data.get('manufacturer', '').strip(),
-                        'model': f"{plane_data.get('manufacturer', '').strip()} {plane_data.get('model', '').strip()}".strip(),
+                        'manufacturer': manufacturer,
+                        'model': full_model,
                         'airline': plane_data.get('owner', '').strip(),
                         'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
 
                     existing_rows.append(row_data)
 
-                    # Write all rows to a temp file and replace the original atomically
+                    # Write to temp file and atomically replace original
                     temp_file = None
                     try:
-                        with tempfile.NamedTemporaryFile(mode='w', newline=True, encoding='utf-8',
+                        with tempfile.NamedTemporaryFile(mode='w', newline='', encoding='utf-8',
                                                         dir=stats_dir, delete=False) as temp_file:
                             temp_path = temp_file.name
                             fieldnames = ['icao', 'manufacturer', 'model', 'full_model', 'airline', 'timestamp']
                             writer = csv.DictWriter(temp_file, fieldnames=fieldnames)
-
                             writer.writeheader()
                             writer.writerows(existing_rows)
 
                         shutil.move(temp_path, csv_path)  # Atomic move
 
                     except Exception as e:
-                        if temp_file and os.path.exists(temp_path):
+                        if temp_file:
                             try:
-                                os.unlink(temp_path)
-                            except:
+                                os.unlink(temp_file.name)
+                            except Exception:
                                 pass
                         print(f"Error saving plane data: {e}")
 

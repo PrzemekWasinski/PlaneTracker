@@ -101,10 +101,9 @@ class MainActivity : AppCompatActivity() {
                 Log.e("InitialLoadError", "Error loading initial data: ${e.message}")
             }
         }
-
         scheduleNotification()
     }
-    
+
     private suspend fun updateStatsDisplay(
         date: String,
         pieChart: CustomPieChart,
@@ -118,14 +117,40 @@ class MainActivity : AppCompatActivity() {
             val statsData = getStatsData(date)
 
             withContext(Dispatchers.Main) {
-                // Update pie chart
                 updatePieChart(pieChart, statsData.optJSONObject("manufacturer_breakdown"))
 
-                // Update statistics
                 totalPlanesText.text = "Total Planes Today: ${statsData.optString("total", "N/A")}"
-                topAirlineText.text = "Top Airline: ${statsData.getJSONObject("top_airline").getString("name")}"
-                topModelText.text = "Top Model: ${statsData.getJSONObject("top_model").getString("name")}"
-                topManufacturerText.text = "Top Manufacturer: ${statsData.getJSONObject("top_manufacturer").getString("name")}"
+
+                // Parse top airline data
+                val topAirlineData = statsData.optJSONObject("top_airline")
+                if (topAirlineData != null) {
+                    val airlineName = topAirlineData.optString("name", "N/A")
+                    val airlineCount = topAirlineData.optString("count", "0")
+                    topAirlineText.text = "Top Airline: $airlineName ($airlineCount)"
+                } else {
+                    topAirlineText.text = "Top Airline: N/A"
+                }
+
+                // Parse top model data
+                val topModelData = statsData.optJSONObject("top_model")
+                if (topModelData != null) {
+                    val modelName = topModelData.optString("name", "N/A")
+                    val modelCount = topModelData.optString("count")
+                    topModelText.text = "Top Model: $modelName ($modelCount)"
+                } else {
+                    topModelText.text = "Top Model: N/A"
+                }
+
+                // Parse top manufacturer data
+                val topManufacturerData = statsData.optJSONObject("top_manufacturer")
+                if (topManufacturerData != null) {
+                    val manufacturerName = topManufacturerData.optString("name", "N/A")
+                    val manufacturerCount = topManufacturerData.optString("count", "0")
+                    topManufacturerText.text = "Top Manufacturer: $manufacturerName ($manufacturerCount)"
+                } else {
+                    topManufacturerText.text = "Top Manufacturer: N/A"
+                }
+
                 lastUpdatedText.text = "Last Updated: ${statsData.optString("last_updated", "N/A")}"
             }
         } catch (e: Exception) {
@@ -153,9 +178,32 @@ class MainActivity : AppCompatActivity() {
 
                 // Get other stats
                 statsJson.put("total", snapshot.child("total").value?.toString() ?: "0")
-                statsJson.put("top_airline", snapshot.child("top_airline").value?.toString() ?: "N/A")
-                statsJson.put("top_model", snapshot.child("top_model").value?.toString() ?: "N/A")
-                statsJson.put("top_manufacturer", snapshot.child("top_manufacturer").value?.toString() ?: "N/A")
+
+                // Parse top airline with nested structure
+                val topAirlineSnapshot = snapshot.child("top_airline")
+                if (topAirlineSnapshot.exists()) {
+                    val topAirlineJson = JSONObject()
+                    topAirlineJson.put("name", topAirlineSnapshot.child("name").value?.toString() ?: "N/A")
+                    topAirlineJson.put("count", topAirlineSnapshot.child("count").value?.toString() ?: "0")
+                    statsJson.put("top_airline", topAirlineJson)
+                }
+
+                // Parse top model with nested structure
+                val topModelSnapshot = snapshot.child("top_model")
+                if (topModelSnapshot.exists()) {
+                    val topModelJson = JSONObject()
+                    topModelJson.put("name", topModelSnapshot.child("name").value?.toString() ?: "N/A")
+                    statsJson.put("top_model", topModelJson)
+                }
+
+                // Parse top manufacturer with nested structure
+                val topManufacturerSnapshot = snapshot.child("top_manufacturer")
+                if (topManufacturerSnapshot.exists()) {
+                    val topManufacturerJson = JSONObject()
+                    topManufacturerJson.put("name", topManufacturerSnapshot.child("name").value?.toString() ?: "N/A")
+                    statsJson.put("top_manufacturer", topManufacturerJson)
+                }
+
                 statsJson.put("last_updated", snapshot.child("last_updated").value?.toString() ?: "N/A")
             }
         } catch (e: Exception) {

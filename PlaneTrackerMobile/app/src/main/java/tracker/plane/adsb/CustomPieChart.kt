@@ -6,10 +6,10 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.util.AttributeSet
+import android.view.MotionEvent
 import android.view.View
-import kotlin.math.cos
+import android.widget.ScrollView
 import kotlin.math.min
-import kotlin.math.sin
 
 class CustomPieChart @JvmOverloads constructor(
     context: Context,
@@ -31,6 +31,10 @@ class CustomPieChart @JvmOverloads constructor(
 
     private val rect = RectF()
     private var data: List<PieSlice> = emptyList()
+    private var legendScrollY = 0f
+    private var maxLegendScrollY = 0f
+    private var isScrollingLegend = false
+    private var lastTouchY = 0f
 
     private val colors = listOf(
         Color.parseColor("#FF6B6B"),
@@ -45,18 +49,80 @@ class CustomPieChart @JvmOverloads constructor(
         Color.parseColor("#85C1E6")
     )
 
-    data class PieSlice(val label: String, val value: Float, val color: Int)
+    data class PieSlice(val label: String, val value: Float, val color: Int, val count: Int)
 
     fun setData(manufacturers: Map<String, Int>) {
         val total = manufacturers.values.sum().toFloat()
-        data = manufacturers.entries.mapIndexed { index, entry ->
-            PieSlice(
-                label = entry.key,
-                value = (entry.value / total) * 360f,
-                color = colors[index % colors.size]
-            )
-        }
+
+        // Sort by count (highest to lowest) and create pie slices
+        data = manufacturers.entries
+            .sortedByDescending { it.value }
+            .mapIndexed { index, entry ->
+                PieSlice(
+                    label = entry.key,
+                    value = (entry.value / total) * 360f,
+                    color = colors[index % colors.size],
+                    count = entry.value
+                )
+            }
+
+        // Calculate max scroll for legend
+        calculateMaxLegendScroll()
+        legendScrollY = 0f // Reset scroll position
         invalidate()
+    }
+
+    private fun calculateMaxLegendScroll() {
+        val legendItemHeight = 40f
+        val legendHeight = data.size * legendItemHeight
+        val availableHeight = height * 0.4f // Available space for legend
+        maxLegendScrollY = maxOf(0f, legendHeight - availableHeight)
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        calculateMaxLegendScroll()
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        val centerY = height * 0.4f
+        val radius = min(width / 2f, centerY) * 0.8f
+        val legendStartY = centerY + radius + 50f
+
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                lastTouchY = event.y
+                isScrollingLegend = event.y > legendStartY
+
+                // If touching in legend area and there's content to scroll, request parent not to intercept
+                if (isScrollingLegend && maxLegendScrollY > 0) {
+                    parent.requestDisallowInterceptTouchEvent(true)
+                }
+                return true
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                if (isScrollingLegend && maxLegendScrollY > 0) {
+                    val deltaY = lastTouchY - event.y
+                    val newScrollY = (legendScrollY + deltaY).coerceIn(0f, maxLegendScrollY)
+
+                    // Only consume the event if we actually scrolled
+                    if (newScrollY != legendScrollY) {
+                        legendScrollY = newScrollY
+                        lastTouchY = event.y
+                        invalidate()
+                        return true
+                    }
+                }
+            }
+
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                isScrollingLegend = false
+                parent.requestDisallowInterceptTouchEvent(false)
+            }
+        }
+
+        return super.onTouchEvent(event)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -114,40 +180,86 @@ class CustomPieChart @JvmOverloads constructor(
             textPaint
         )
 
-        // Draw legend
-        drawLegend(canvas, centerY + radius + 50f)
+        // Draw scrollable legend
+        drawScrollableLegend(canvas, centerY + radius + 50f)
     }
 
-    private fun drawLegend(canvas: Canvas, startY: Float) {
-        val total = data.sumOf { it.value.toDouble() / 360.0 * 100 }.toFloat()
-        var currentY = startY
+    private fun drawScrollableLegend(canvas: Canvas, startY: Float) {
         val legendItemHeight = 40f
         val colorBoxSize = 24f
         val margin = 16f
+        val legendAreaHeight = height - startY
+
+        // Create clipping rectangle for legend area
+        canvas.save()
+        canvas.clipRect(0f, startY, width.toFloat(), height.toFloat())
+
+        var currentY = startY - legendScrollY
+        val total = data.sumOf { it.count }
 
         data.forEach { slice ->
-            val percentage = (slice.value / 360f * 100f).toInt()
+            // Only draw items that are visible in the clipped area
+            if (currentY + legendItemHeight >= startY && currentY <= height) {
+                val percentage = ((slice.count.toFloat() / total) * 100f).toDouble()
+                val rounded = String.format("%.2f", percentage) // "3.14"
 
-            // Draw color box
-            paint.color = slice.color
-            canvas.drawRect(
-                margin,
-                currentY,
-                margin + colorBoxSize,
-                currentY + colorBoxSize,
-                paint
-            )
+                // Draw color box with rounded corners
+                paint.color = slice.color
+                val colorRect = RectF(
+                    margin,
+                    currentY,
+                    margin + colorBoxSize,
+                    currentY + colorBoxSize
+                )
+                canvas.drawRoundRect(colorRect, 4f, 4f, paint)
 
-            // Draw label and percentage
-            legendPaint.color = Color.WHITE
-            canvas.drawText(
-                "${slice.label}: $percentage%",
-                margin + colorBoxSize + 16f,
-                currentY + colorBoxSize / 2f + legendPaint.textSize / 3f,
-                legendPaint
-            )
+                // Draw label, count and percentage
+                legendPaint.color = Color.WHITE
+
+                val labelText = "${slice.label}: ${slice.count} ($rounded%)"
+                canvas.drawText(
+                    labelText,
+                    margin + colorBoxSize + 16f,
+                    currentY + colorBoxSize / 2f + legendPaint.textSize / 3f,
+                    legendPaint
+                )
+            }
 
             currentY += legendItemHeight
         }
+
+        canvas.restore()
+
+        // Draw scroll indicator if content is scrollable
+        if (maxLegendScrollY > 0) {
+            drawScrollIndicator(canvas, startY, legendAreaHeight)
+        }
+    }
+
+    private fun drawScrollIndicator(canvas: Canvas, startY: Float, legendAreaHeight: Float) {
+        val indicatorWidth = 4f
+        val indicatorX = width - 12f
+        val indicatorHeight = (legendAreaHeight / (maxLegendScrollY + legendAreaHeight)) * legendAreaHeight
+        val indicatorY = startY + (legendScrollY / maxLegendScrollY) * (legendAreaHeight - indicatorHeight)
+
+        // Draw scroll track
+        paint.color = Color.parseColor("#33FFFFFF")
+        canvas.drawRect(
+            indicatorX,
+            startY,
+            indicatorX + indicatorWidth,
+            startY + legendAreaHeight,
+            paint
+        )
+
+        // Draw scroll thumb
+        paint.color = Color.parseColor("#80FFFFFF")
+        val thumbRect = RectF(
+            indicatorX,
+            indicatorY,
+            indicatorX + indicatorWidth,
+            indicatorY + indicatorHeight
+        )
+        canvas.drawRoundRect(thumbRect, 2f, 2f, paint)
     }
 }
