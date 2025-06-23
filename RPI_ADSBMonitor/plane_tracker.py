@@ -14,10 +14,11 @@ import threading
 import gc 
 import queue
 import requests
-import math
-import re
-import json
-from functions import restart_script, connect, coords_to_xy, split_message, clean_string, get_stats
+import csv
+from collections import Counter
+import tempfile
+import shutil
+from functions import restart_script, connect, coords_to_xy, split_message, clean_string, get_stats, safe_json_read, safe_json_write
 
 if not firebase_admin._apps: #Initialise Firebase
     cred = credentials.Certificate("./rpi-flight-tracker-firebase-adminsdk-fbsvc-a6afd2b5b0.json")
@@ -221,49 +222,64 @@ def collect_and_process_data():
                 try:
 
                     today = datetime.today().strftime("%Y-%m-%d")
-                    path = f'./stats_history/{today}.json'
+                    stats_dir = './stats_history'
+                    csv_path = os.path.join(stats_dir, f'{today}.csv')
 
-                    # Initialize file if it doesn't exist
-                    if not os.path.exists(path):
-                        with open(path, "w") as outfile:
-                            json.dump({
-                                "total": 0, 
-                                "models": {}, 
-                                "manufacturers": {}, 
-                                "airlines": {}
-                            }, outfile)
+                    # Ensure stats directory exists
+                    os.makedirs(stats_dir, exist_ok=True)
 
-                    # Read existing data
-                    with open(path, 'r') as openfile:
-                        json_object = json.load(openfile)
+                    icao = plane_data.get("icao")
+                    if not icao:
+                        return  # Skip if no ICAO code
 
-                    # Update counters
-                    json_object["total"] += 1
+                    existing_rows = []
+                    existing_icaos = set()
 
-                    # Update model count
-                    model = plane_data.get("model")
-                    if model in json_object["models"]:
-                        json_object["models"][model] += 1
-                    else:
-                        json_object["models"][model] = 1
+                    # Read existing file if it exists
+                    if os.path.exists(csv_path):
+                        try:
+                            with open(csv_path, 'r', newline='', encoding='utf-8') as file:
+                                reader = csv.DictReader(file)
+                                for row in reader:
+                                    if row.get('icao'):
+                                        existing_rows.append(row)
+                                        existing_icaos.add(row['icao'])
+                        except (FileNotFoundError, PermissionError, csv.Error):
+                            existing_rows = []
+                            existing_icaos = set()
 
-                    # Update manufacturer count
-                    manufacturer = plane_data.get("manufacturer")
-                    if manufacturer in json_object["manufacturers"]:
-                        json_object["manufacturers"][manufacturer] += 1
-                    else:
-                        json_object["manufacturers"][manufacturer] = 1
+                    # Add new row
+                    row_data = {
+                        'icao': icao,
+                        'manufacturer': plane_data.get('manufacturer', '').strip(),
+                        'model': f"{plane_data.get('manufacturer', '').strip()} {plane_data.get('model', '').strip()}".strip(),
+                        'airline': plane_data.get('owner', '').strip(),
+                        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
 
-                    # Update airline count
-                    owner = plane_data.get("owner")
-                    if owner in json_object["airlines"]:
-                        json_object["airlines"][owner] += 1
-                    else:
-                        json_object["airlines"][owner] = 1
+                    existing_rows.append(row_data)
 
-                    # Write back to file
-                    with open(path, "w") as outfile:
-                        json.dump(json_object, outfile)
+                    # Write all rows to a temp file and replace the original atomically
+                    temp_file = None
+                    try:
+                        with tempfile.NamedTemporaryFile(mode='w', newline=True, encoding='utf-8',
+                                                        dir=stats_dir, delete=False) as temp_file:
+                            temp_path = temp_file.name
+                            fieldnames = ['icao', 'manufacturer', 'model', 'full_model', 'airline', 'timestamp']
+                            writer = csv.DictWriter(temp_file, fieldnames=fieldnames)
+
+                            writer.writeheader()
+                            writer.writerows(existing_rows)
+
+                        shutil.move(temp_path, csv_path)  # Atomic move
+
+                    except Exception as e:
+                        if temp_file and os.path.exists(temp_path):
+                            try:
+                                os.unlink(temp_path)
+                            except:
+                                pass
+                        print(f"Error saving plane data: {e}")
 
 
 
@@ -375,6 +391,7 @@ def main():
     global ram_percentage
     global run
     start_time = time.time()
+    update_time = time.time()
 
     #Check run status and start threads
     check_run_status()
@@ -386,12 +403,17 @@ def main():
     display_incomplete = False  
 
     while True:
-        if time.time() - start_time > 1800: #Reset tracker every 30min and upload todays stats to firebase
+        current_time = time.time()
+
+        if current_time - start_time > 1800: #Reset tracker every 30min and upload todays stats to firebase
+            print("Restarting plane tracker...")
+            restart_script()
+
+        if current_time - update_time > 60: #Update stats every 5min
             today = datetime.today().strftime("%Y-%m-%d")
             ref = db.reference(f"{today}/stats")
             ref.set(get_stats())
-            print("Restarting plane tracker...")
-            restart_script()
+            update_time = time.time()
 
         ram_percentage = psutil.virtual_memory()[2] #Get RAM usage
 

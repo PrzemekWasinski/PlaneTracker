@@ -10,9 +10,14 @@ from firebase_admin import db
 import requests
 import math
 import re
-import concurrent.futures
 import json
 from time import strftime, localtime
+import csv
+import os
+from datetime import datetime
+from time import strftime, localtime
+from collections import Counter
+import portalocker
 
 def restart_script(): #Function to restart the script
     print("Restarting script")
@@ -77,34 +82,79 @@ def split_message(message):
 def clean_string(string):
     return re.sub(r"[\/\\\.,:]", " ", string)
 
+def safe_json_write(path, data):
+    with open(path, 'w') as f:
+        portalocker.lock(f, portalocker.LOCK_EX)
+        json.dump(data, f, indent=2)
+
+def safe_json_read(path):
+    with open(path, 'r') as f:
+        portalocker.lock(f, portalocker.LOCK_SH)
+        return json.load(f)
+
 def get_stats():
     today = datetime.today().strftime("%Y-%m-%d")
+    csv_path = os.path.join('./stats_history', f'{today}.csv')
+
+    default_stats = {
+        'total': 0,
+        'top_model': {'name': None, 'count': 0},
+        'top_manufacturer': {'name': None, 'count': 0},
+        'top_airline': {'name': None, 'count': 0},
+        'manufacturer_breakdown': {},
+        'last_updated': strftime("%H:%M:%S", localtime())
+    }
+
+    if not os.path.exists(csv_path):
+        return default_stats
+
     try:
-        with open(f"./stats_history/{today}.json", 'r') as f:
-            data = json.load(f)
+        with open(csv_path, 'r', newline='', encoding='utf-8') as file:
+            reader = csv.DictReader(file)
+            planes = []
 
-        top_model = max(data['models'].items(), key=lambda x: x[1]) if data['models'] else (None, 0)
-        top_manufacturer = max(data['manufacturers'].items(), key=lambda x: x[1]) if data['manufacturers'] else (None, 0)
-        top_airline = max(data['airlines'].items(), key=lambda x: x[1]) if data['airlines'] else (None, 0)
-        
-        return {
-            'total': data['total'],
-            'top_model': {'name': top_model[0], 'count': top_model[1]},
-            'top_manufacturer': {'name': top_manufacturer[0], 'count': top_manufacturer[1]},
-            'top_airline': {'name': top_airline[0], 'count': top_airline[1]},
-            "last_updated": strftime("%H:%M:%S", localtime())
-        }
-        
-    except FileNotFoundError:
-        return {
-            'total': 0,
-            'top_model': {'name': None, 'count': 0},
-            'top_manufacturer': {'name': None, 'count': 0},
-            'top_airline': {'name': None, 'count': 0},
-            "last_updated": strftime("%H:%M:%S", localtime())
-        }
-    except json.JSONDecodeError:
-        raise ValueError("Invalid JSON file format")
-    except KeyError:
-        raise ValueError("File exists but doesn't have the expected structure")
+            for row in reader:
+                if not row.get('icao'):
+                    continue
 
+                manufacturer = row.get('manufacturer', '').strip()
+                model = row.get('model', '').strip()
+                airline = row.get('airline', '').strip()
+
+                # Skip row if any key field is "-"
+                if '-' in (manufacturer, model, airline):
+                    continue
+
+                planes.append({
+                    'manufacturer': manufacturer,
+                    'model': model,
+                    'airline': airline
+                })
+
+            if not planes:
+                return default_stats
+
+            # Count occurrences
+            model_counter = Counter(p['model'] for p in planes)
+            manufacturer_counter = Counter(p['manufacturer'] for p in planes)
+            airline_counter = Counter(p['airline'] for p in planes)
+
+            top_model = model_counter.most_common(1)[0] if model_counter else (None, 0)
+            top_manufacturer = manufacturer_counter.most_common(1)[0] if manufacturer_counter else (None, 0)
+            top_airline = airline_counter.most_common(1)[0] if airline_counter else (None, 0)
+
+            return {
+                'total': len(planes),
+                'top_model': {'name': top_model[0], 'count': top_model[1]},
+                'top_manufacturer': {'name': top_manufacturer[0], 'count': top_manufacturer[1]},
+                'top_airline': {'name': top_airline[0], 'count': top_airline[1]},
+                'manufacturer_breakdown': dict(manufacturer_counter),
+                'last_updated': strftime("%H:%M:%S", localtime())
+            }
+
+    except (FileNotFoundError, PermissionError, csv.Error, UnicodeDecodeError) as e:
+        print(f"Error reading stats file: {e}")
+        return default_stats
+    except Exception as e:
+        print(f"Unexpected error getting stats: {e}")
+        return default_stats

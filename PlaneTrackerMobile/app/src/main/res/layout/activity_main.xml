@@ -62,7 +62,7 @@
             android:layout_width="137dp"
             android:layout_height="40dp"
             android:layout_marginBottom="16dp"
-            android:text="Get Planes"
+            android:text="Refresh"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintHorizontal_bias="0.535"
@@ -78,17 +78,103 @@
             app:layout_constraintBottom_toBottomOf="@+id/RAMUsage"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintTop_toTopOf="@+id/RAMUsage"
-            app:layout_constraintVertical_bias="0.12" />
+            app:layout_constraintVertical_bias="0.12"
+            tools:ignore="UseSwitchCompatOrMaterialXml" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/recyclerView"
+    <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
         app:layout_constraintTop_toBottomOf="@+id/navBarContainer"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent" />
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <!-- Custom Pie Chart -->
+            <tracker.plane.adsb.CustomPieChart
+                android:id="@+id/pieChart"
+                android:layout_width="match_parent"
+                android:layout_height="400dp"
+                android:layout_marginBottom="24dp" />
+
+            <!-- Statistics Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Daily Statistics"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:textColor="@android:color/black"
+                android:layout_marginBottom="16dp"
+                android:gravity="center" />
+
+            <TextView
+                android:id="@+id/totalPlanesText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Total Planes Today: Loading..."
+                android:textSize="16sp"
+                android:textColor="@android:color/black"
+                android:layout_marginBottom="8dp"
+                android:padding="8dp"
+                android:background="@android:color/white"
+                android:elevation="2dp" />
+
+            <TextView
+                android:id="@+id/topAirlineText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Top Airline: Loading..."
+                android:textSize="16sp"
+                android:textColor="@android:color/black"
+                android:layout_marginBottom="8dp"
+                android:padding="8dp"
+                android:background="@android:color/white"
+                android:elevation="2dp" />
+
+            <TextView
+                android:id="@+id/topModelText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Top Model: Loading..."
+                android:textSize="16sp"
+                android:textColor="@android:color/black"
+                android:layout_marginBottom="8dp"
+                android:padding="8dp"
+                android:background="@android:color/white"
+                android:elevation="2dp" />
+
+            <TextView
+                android:id="@+id/topManufacturerText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Top Manufacturer: Loading..."
+                android:textSize="16sp"
+                android:textColor="@android:color/black"
+                android:layout_marginBottom="8dp"
+                android:padding="8dp"
+                android:background="@android:color/white"
+                android:elevation="2dp" />
+
+            <TextView
+                android:id="@+id/lastUpdatedText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Last Updated: Loading..."
+                android:textSize="16sp"
+                android:textColor="@android:color/black"
+                android:padding="8dp"
+                android:background="@android:color/white"
+                android:elevation="2dp" />
+
+        </LinearLayout>
+    </ScrollView>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

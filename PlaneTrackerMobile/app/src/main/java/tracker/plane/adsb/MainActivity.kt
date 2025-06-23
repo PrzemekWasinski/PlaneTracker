@@ -1,9 +1,11 @@
 package tracker.plane.adsb
 
+import android.annotation.SuppressLint
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.icu.text.SimpleDateFormat
 import android.os.Bundle
 import android.util.Log
@@ -12,39 +14,44 @@ import android.widget.DatePicker
 import android.widget.Switch
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
+import android.view.View
 import com.google.firebase.database.FirebaseDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.delay
 import java.util.*
 
 class MainActivity : AppCompatActivity() {
-    private var layoutManager: RecyclerView.LayoutManager? = null
-    private lateinit var adapter: RecyclerAdapter
+    private var isUserChangingSwitch = false
+    private var userChangeTimestamp = 0L
 
+    @SuppressLint("UseSwitchCompatOrMaterialCode")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        val recyclerView = findViewById<RecyclerView>(R.id.recyclerView)
+        val pieChart = findViewById<CustomPieChart>(R.id.pieChart)
         val cpuTemp = findViewById<TextView>(R.id.CPUTemp)
         val ramPercentage = findViewById<TextView>(R.id.RAMUsage)
         val runSwitch = findViewById<Switch>(R.id.runSwitch)
         val datePicker = findViewById<DatePicker>(R.id.datePicker)
         val refreshButton = findViewById<Button>(R.id.refreshButton)
 
-        layoutManager = LinearLayoutManager(this)
-        recyclerView.layoutManager = layoutManager
+        // Stats TextViews
+        val totalPlanesText = findViewById<TextView>(R.id.totalPlanesText)
+        val topAirlineText = findViewById<TextView>(R.id.topAirlineText)
+        val topModelText = findViewById<TextView>(R.id.topModelText)
+        val topManufacturerText = findViewById<TextView>(R.id.topManufacturerText)
+        val lastUpdatedText = findViewById<TextView>(R.id.lastUpdatedText)
 
-        adapter = RecyclerAdapter()
-        recyclerView.adapter = adapter
+        // No setup needed for custom pie chart
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -55,7 +62,6 @@ class MainActivity : AppCompatActivity() {
                         } catch (e: Exception) {
                             Log.e("UpdateError", "Error updating UI: ${e.message}")
                         }
-
                     }
                     delay(5000)
                 }
@@ -65,6 +71,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         runSwitch.setOnCheckedChangeListener { _, isChecked ->
+            isUserChangingSwitch = true
+            userChangeTimestamp = System.currentTimeMillis()
+
+            Log.d("SwitchChange", "User changed switch to: $isChecked")
             updateRunValue(isChecked)
         }
 
@@ -72,41 +82,109 @@ class MainActivity : AppCompatActivity() {
             val selectedDate = getDateFromDatePicker(datePicker)
             CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    val calendar = Calendar.getInstance()
-
-                    val minutes = calendar.get(Calendar.MINUTE)
-                    val roundedMinutes = (minutes / 10) * 10
-                    calendar.set(Calendar.MINUTE, roundedMinutes)
-                    calendar.set(Calendar.SECOND, 0)
-                    calendar.set(Calendar.MILLISECOND, 0)
-
-                    val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-                    val roundedTime = timeFormat.format(calendar.time)
-
-                    val jsonArray = getData("$selectedDate/$roundedTime", runSwitch)
-                    withContext(Dispatchers.Main) {
-                        updateRecyclerView(jsonArray)
-                    }
+                    updateStatsDisplay(selectedDate, pieChart, totalPlanesText, topAirlineText,
+                        topModelText, topManufacturerText, lastUpdatedText)
                 } catch (e: Exception) {
                     Log.e("RefreshError", "Error refreshing data: ${e.message}")
                 }
             }
         }
 
+        // Load initial data for today
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
                 val currentDate = sdf.format(Date())
-                val jsonArray = getData(getPath(), runSwitch)
-                withContext(Dispatchers.Main) {
-                    updateRecyclerView(jsonArray)
-                }
+                updateStatsDisplay(currentDate, pieChart, totalPlanesText, topAirlineText,
+                    topModelText, topManufacturerText, lastUpdatedText)
             } catch (e: Exception) {
                 Log.e("InitialLoadError", "Error loading initial data: ${e.message}")
             }
         }
 
         scheduleNotification()
+    }
+    
+    private suspend fun updateStatsDisplay(
+        date: String,
+        pieChart: CustomPieChart,
+        totalPlanesText: TextView,
+        topAirlineText: TextView,
+        topModelText: TextView,
+        topManufacturerText: TextView,
+        lastUpdatedText: TextView
+    ) {
+        try {
+            val statsData = getStatsData(date)
+
+            withContext(Dispatchers.Main) {
+                // Update pie chart
+                updatePieChart(pieChart, statsData.optJSONObject("manufacturer_breakdown"))
+
+                // Update statistics
+                totalPlanesText.text = "Total Planes Today: ${statsData.optString("total", "N/A")}"
+                topAirlineText.text = "Top Airline: ${statsData.getJSONObject("top_airline").getString("name")}"
+                topModelText.text = "Top Model: ${statsData.getJSONObject("top_model").getString("name")}"
+                topManufacturerText.text = "Top Manufacturer: ${statsData.getJSONObject("top_manufacturer").getString("name")}"
+                lastUpdatedText.text = "Last Updated: ${statsData.optString("last_updated", "N/A")}"
+            }
+        } catch (e: Exception) {
+            Log.e("StatsDisplayError", "Error updating stats display: ${e.message}")
+        }
+    }
+
+    private suspend fun getStatsData(date: String): JSONObject {
+        val database = FirebaseDatabase.getInstance()
+        val reference = database.getReference("$date/stats")
+
+        val statsJson = JSONObject()
+        try {
+            val snapshot = reference.get().await()
+            if (snapshot.exists()) {
+                // Get manufacturer breakdown
+                val manufacturerBreakdown = snapshot.child("manufacturer_breakdown")
+                if (manufacturerBreakdown.exists()) {
+                    val manufacturerJson = JSONObject()
+                    for (child in manufacturerBreakdown.children) {
+                        manufacturerJson.put(child.key ?: "", child.value?.toString() ?: "0")
+                    }
+                    statsJson.put("manufacturer_breakdown", manufacturerJson)
+                }
+
+                // Get other stats
+                statsJson.put("total", snapshot.child("total").value?.toString() ?: "0")
+                statsJson.put("top_airline", snapshot.child("top_airline").value?.toString() ?: "N/A")
+                statsJson.put("top_model", snapshot.child("top_model").value?.toString() ?: "N/A")
+                statsJson.put("top_manufacturer", snapshot.child("top_manufacturer").value?.toString() ?: "N/A")
+                statsJson.put("last_updated", snapshot.child("last_updated").value?.toString() ?: "N/A")
+            }
+        } catch (e: Exception) {
+            Log.e("GetStatsError", "Error fetching stats: ${e.message}")
+        }
+
+        return statsJson
+    }
+
+    private fun updatePieChart(pieChart: CustomPieChart, manufacturerData: JSONObject?) {
+        try {
+            val manufacturers = mutableMapOf<String, Int>()
+
+            if (manufacturerData != null) {
+                val keys = manufacturerData.keys()
+                while (keys.hasNext()) {
+                    val manufacturer = keys.next()
+                    val count = manufacturerData.optInt(manufacturer, 0)
+                    if (count > 0) {
+                        manufacturers[manufacturer] = count
+                    }
+                }
+            }
+
+            pieChart.setData(manufacturers)
+
+        } catch (e: Exception) {
+            Log.e("PieChartError", "Error updating pie chart: ${e.message}")
+        }
     }
 
     private suspend fun updateDeviceStats(cpuTemp: TextView, ramPercentage: TextView, runSwitch: Switch) {
@@ -119,12 +197,32 @@ class MainActivity : AppCompatActivity() {
             cpuTemp.text = "CPU: ${cpuTempValue.substringBefore(".")}°C"
             ramPercentage.text = "RAM: $ramUsageValue%"
 
-            runSwitch.setOnCheckedChangeListener(null)
+            // Check if enough time has passed since user change (10 seconds)
+            val currentTime = System.currentTimeMillis()
+            if (isUserChangingSwitch && (currentTime - userChangeTimestamp) < 10000) {
+                Log.d("SwitchUpdate", "Skipping switch update - user recently changed it")
+                return
+            }
 
-            runSwitch.isChecked = stats.optBoolean("run", false)
+            // Reset the flag after 10 seconds
+            if (isUserChangingSwitch && (currentTime - userChangeTimestamp) >= 10000) {
+                isUserChangingSwitch = false
+                Log.d("SwitchUpdate", "Reset user change flag")
+            }
 
-            runSwitch.setOnCheckedChangeListener { _, isChecked ->
-                updateRunValue(isChecked)
+            val firebaseRunValue = stats.optBoolean("run", false)
+
+            // Only update if different and not during user change period
+            if (runSwitch.isChecked != firebaseRunValue && !isUserChangingSwitch) {
+                Log.d("SwitchUpdate", "Updating switch from Firebase: $firebaseRunValue")
+                runSwitch.setOnCheckedChangeListener(null)
+                runSwitch.isChecked = firebaseRunValue
+                runSwitch.setOnCheckedChangeListener { _, isChecked ->
+                    isUserChangingSwitch = true
+                    userChangeTimestamp = System.currentTimeMillis()
+                    Log.d("SwitchChange", "User changed switch to: $isChecked")
+                    updateRunValue(isChecked)
+                }
             }
         } catch (e: Exception) {
             Log.e("DeviceStatsError", "Error in updateDeviceStats: ${e.message}")
@@ -156,86 +254,6 @@ class MainActivity : AppCompatActivity() {
         return json
     }
 
-    fun getPath(): String {
-        val sdf = SimpleDateFormat("YYYY-MM-dd")
-        val currentDate = sdf.format(Date())
-        val calendar = Calendar.getInstance()
-
-        val minutes = calendar.get(Calendar.MINUTE)
-        val roundedMinutes = (minutes / 10) * 10
-        calendar.set(Calendar.MINUTE, roundedMinutes)
-        calendar.set(Calendar.SECOND, 0)
-        calendar.set(Calendar.MILLISECOND, 0)
-
-        val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-        val roundedTime = timeFormat.format(calendar.time)
-
-        return "/$currentDate/$roundedTime"
-    }
-
-    private suspend fun getData(path: String, runSwitch: Switch): JSONArray {
-        val jsonArray = JSONArray()
-        if (runSwitch.isChecked) {
-            val database = FirebaseDatabase.getInstance()
-            val reference = database.getReference(path)
-            try {
-                val snapshot = reference.get().await()
-                if (!snapshot.exists()) return jsonArray
-
-                for (i in snapshot.children) {
-                    try {
-                        val key = i.key ?: continue
-
-                        val planeJson = JSONObject()
-                        planeJson.put("altitude", i.child("altitude").value?.toString() ?: "N/A")
-                        planeJson.put(
-                            "code_mode_s",
-                            i.child("code_mode_s").value?.toString() ?: "N/A"
-                        )
-                        planeJson.put("icao", i.child("icao").value?.toString() ?: "N/A")
-                        planeJson.put(
-                            "icao_type_code",
-                            i.child("icao_type_code").value?.toString() ?: "N/A"
-                        )
-                        planeJson.put("lat", i.child("lat").value?.toString() ?: "N/A")
-                        planeJson.put("lon", i.child("lon").value?.toString() ?: "N/A")
-                        planeJson.put(
-                            "manufacturer",
-                            i.child("manufacturer").value?.toString() ?: "N/A"
-                        )
-                        planeJson.put("model", i.child("model").value?.toString() ?: "N/A")
-                        planeJson.put(
-                            "operator_flag",
-                            i.child("operator_flag").value?.toString() ?: "N/A"
-                        )
-                        planeJson.put("owner", i.child("owner").value?.toString() ?: "N/A")
-                        planeJson.put(
-                            "registration",
-                            i.child("registration").value?.toString() ?: "N/A"
-                        )
-                        planeJson.put("speed", i.child("speed").value?.toString() ?: "N/A")
-                        planeJson.put(
-                            "spotted_at",
-                            i.child("spotted_at").value?.toString() ?: "N/A"
-                        )
-                        planeJson.put("track", i.child("track").value?.toString() ?: "N/A")
-
-                        val jsonObject = JSONObject()
-                        jsonObject.put(key, planeJson)
-                        jsonArray.put(jsonObject)
-                    } catch (e: Exception) {
-                        Log.e("DataProcessingError", "Error processing plane data: ${e.message}")
-                        continue
-                    }
-                }
-            } catch (error: Exception) {
-                Log.e("GetDataError", "Error fetching data: ${error.message}")
-            }
-        }
-
-        return jsonArray
-    }
-
     private fun scheduleNotification() {
         try {
             val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -257,16 +275,26 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateRunValue(newState: Boolean) {
         try {
+            Log.d("Firebase", "Attempting to update run value to: $newState")
             val database = FirebaseDatabase.getInstance()
             val reference = database.getReference("device_stats/run")
 
             reference.setValue(newState).addOnSuccessListener {
-                Log.d("Firebase", "Run value updated to: $newState")
+                Log.d("Firebase", "Run value successfully updated to: $newState")
+                // Reset the flag faster on successful update
+                CoroutineScope(Dispatchers.Main).launch {
+                    delay(2000) // Wait 2 seconds after successful update
+                    isUserChangingSwitch = false
+                    Log.d("SwitchUpdate", "Reset user change flag after successful Firebase update")
+                }
             }.addOnFailureListener {
                 Log.e("FirebaseError", "Failed to update run value: ${it.message}")
+                // Reset flag on failure too
+                isUserChangingSwitch = false
             }
         } catch (e: Exception) {
             Log.e("UpdateRunError", "Error updating run value: ${e.message}")
+            isUserChangingSwitch = false
         }
     }
 
@@ -281,35 +309,6 @@ class MainActivity : AppCompatActivity() {
             Log.e("DatePickerError", "Error getting date: ${e.message}")
             val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
             return sdf.format(Date())
-        }
-    }
-
-    private fun updateRecyclerView(jsonArray: JSONArray) {
-        try {
-            val planeList = mutableListOf<PlaneData>()
-            for (i in 0 until jsonArray.length()) {
-                try {
-                    val planeObj = jsonArray.getJSONObject(i)
-                    if (planeObj.keys().hasNext()) {
-                        val key = planeObj.keys().next()
-                        val planeJson = planeObj.getJSONObject(key)
-
-                        val plane = PlaneData(
-                            planeModel = "${planeJson.optString("manufacturer", "Unknown")} ${planeJson.optString("model", "")}",
-                            airlineName = planeJson.optString("owner", "Unknown"),
-                            registration = planeJson.optString("registration", "Unknown"),
-                            spottedAt = "Last seen at: ${planeJson.optString("spotted_at", "Unknown")}"
-                        )
-                        planeList.add(plane)
-                    }
-                } catch (e: Exception) {
-                    Log.e("PlaneDataError", "Error processing plane at index $i: ${e.message}")
-                    continue
-                }
-            }
-            adapter.updateData(planeList)
-        } catch (e: Exception) {
-            Log.e("RecyclerViewError", "Error updating recycler view: ${e.message}")
         }
     }
 }
