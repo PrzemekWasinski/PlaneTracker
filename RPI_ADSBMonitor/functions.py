@@ -82,16 +82,6 @@ def split_message(message):
 def clean_string(string):
     return re.sub(r"[\/\\\.,:]", " ", string)
 
-def safe_json_write(path, data):
-    with open(path, 'w') as f:
-        portalocker.lock(f, portalocker.LOCK_EX)
-        json.dump(data, f, indent=2)
-
-def safe_json_read(path):
-    with open(path, 'r') as f:
-        portalocker.lock(f, portalocker.LOCK_SH)
-        return json.load(f)
-
 def get_stats():
     today = datetime.today().strftime("%Y-%m-%d")
     csv_path = os.path.join('./stats_history', f'{today}.csv')

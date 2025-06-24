@@ -18,7 +18,7 @@ import csv
 from collections import Counter
 import tempfile
 import shutil
-from functions import restart_script, connect, coords_to_xy, split_message, clean_string, get_stats, safe_json_read, safe_json_write
+from functions import restart_script, connect, coords_to_xy, split_message, clean_string, get_stats
 
 if not firebase_admin._apps: #Initialise Firebase
     cred = credentials.Certificate("./rpi-flight-tracker-firebase-adminsdk-fbsvc-a6afd2b5b0.json")
@@ -247,43 +247,44 @@ def collect_and_process_data():
                             existing_rows = []
                             existing_icaos = set()
 
-                    # Prepare row data
-                    manufacturer = plane_data.get('manufacturer', '').strip()
-                    model = plane_data.get('model', '').strip()
-                    full_model = f"{manufacturer} {model}".strip()
+                    if icao not in existing_icaos:
 
-                    row_data = {
-                        'icao': icao,
-                        'manufacturer': manufacturer,
-                        'model': full_model,
-                        'airline': plane_data.get('owner', '').strip(),
-                        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    }
+                        # Prepare row data
+                        manufacturer = plane_data.get('manufacturer', '').strip()
+                        model = plane_data.get('model', '').strip()
+                        full_model = f"{manufacturer} {model}".strip()
 
-                    existing_rows.append(row_data)
+                        row_data = {
+                            'icao': icao,
+                            'manufacturer': manufacturer,
+                            'model': full_model,
+                            'airline': plane_data.get('owner', '').strip(),
+                            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
 
-                    # Write to temp file and atomically replace original
-                    temp_file = None
-                    try:
-                        with tempfile.NamedTemporaryFile(mode='w', newline='', encoding='utf-8',
-                                                        dir=stats_dir, delete=False) as temp_file:
-                            temp_path = temp_file.name
-                            fieldnames = ['icao', 'manufacturer', 'model', 'full_model', 'airline', 'timestamp']
-                            writer = csv.DictWriter(temp_file, fieldnames=fieldnames)
-                            writer.writeheader()
-                            writer.writerows(existing_rows)
+                        existing_rows.append(row_data)
 
-                        shutil.move(temp_path, csv_path)  # Atomic move
+                        # Write to temp file and atomically replace original
+                        temp_file = None
+                        
+                        try:
+                            with tempfile.NamedTemporaryFile(mode='w', newline='', encoding='utf-8',
+                                                            dir=stats_dir, delete=False) as temp_file:
+                                temp_path = temp_file.name
+                                fieldnames = ['icao', 'manufacturer', 'model', 'full_model', 'airline', 'timestamp']
+                                writer = csv.DictWriter(temp_file, fieldnames=fieldnames)
+                                writer.writeheader()
+                                writer.writerows(existing_rows)
 
-                    except Exception as e:
-                        if temp_file:
-                            try:
-                                os.unlink(temp_file.name)
-                            except Exception:
-                                pass
-                        print(f"Error saving plane data: {e}")
+                            shutil.move(temp_path, csv_path)  # Atomic move
 
-
+                        except Exception as e:
+                            if temp_file:
+                                try:
+                                    os.unlink(temp_file.name)
+                                except Exception:
+                                    pass
+                            print(f"Error saving plane data: {e}")
 
                     today = datetime.today().strftime("%Y-%m-%d")
                     manufacturer = plane_data.get("manufacturer", "-")
