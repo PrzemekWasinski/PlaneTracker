@@ -201,7 +201,7 @@ class CustomPieChart @JvmOverloads constructor(
             // Only draw items that are visible in the clipped area
             if (currentY + legendItemHeight >= startY && currentY <= height) {
                 val percentage = ((slice.count.toFloat() / total) * 100f).toDouble()
-                val rounded = String.format("%.2f", percentage) // "3.14"
+                val rounded = String.format("%.2f", percentage)
 
                 // Draw color box with rounded corners
                 paint.color = slice.color

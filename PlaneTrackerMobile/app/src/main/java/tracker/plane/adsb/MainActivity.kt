@@ -63,7 +63,7 @@ class MainActivity : AppCompatActivity() {
                             Log.e("UpdateError", "Error updating UI: ${e.message}")
                         }
                     }
-                    delay(5000)
+                    delay(10_000)
                 }
             } catch (e: Exception) {
                 Log.e("CoroutineError", "Coroutine error: ${e.message}")
@@ -119,7 +119,7 @@ class MainActivity : AppCompatActivity() {
             withContext(Dispatchers.Main) {
                 updatePieChart(pieChart, statsData.optJSONObject("manufacturer_breakdown"))
 
-                totalPlanesText.text = "Total Planes Today: ${statsData.optString("total", "N/A")}"
+                totalPlanesText.text = "Total Planes Spotted Today: ${statsData.optString("total", "N/A")}"
 
                 // Parse top airline data
                 val topAirlineData = statsData.optJSONObject("top_airline")
@@ -193,6 +193,7 @@ class MainActivity : AppCompatActivity() {
                 if (topModelSnapshot.exists()) {
                     val topModelJson = JSONObject()
                     topModelJson.put("name", topModelSnapshot.child("name").value?.toString() ?: "N/A")
+                    topModelJson.put("count", topModelSnapshot.child("count").value?.toString() ?: "0")
                     statsJson.put("top_model", topModelJson)
                 }
 
@@ -201,6 +202,7 @@ class MainActivity : AppCompatActivity() {
                 if (topManufacturerSnapshot.exists()) {
                     val topManufacturerJson = JSONObject()
                     topManufacturerJson.put("name", topManufacturerSnapshot.child("name").value?.toString() ?: "N/A")
+                    topManufacturerJson.put("count", topManufacturerSnapshot.child("count").value?.toString() ?: "0")
                     statsJson.put("top_manufacturer", topManufacturerJson)
                 }
 
@@ -313,7 +315,7 @@ class MainActivity : AppCompatActivity() {
             alarmManager.setRepeating(
                 AlarmManager.RTC_WAKEUP,
                 System.currentTimeMillis(),
-                10 * 60 * 1000,
+                2 * 60 * 1000,
                 pendingIntent
             )
         } catch (e: Exception) {

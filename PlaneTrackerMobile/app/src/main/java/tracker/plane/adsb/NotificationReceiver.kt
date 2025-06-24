@@ -63,7 +63,7 @@ class NotificationReceiver : BroadcastReceiver() {
 
             val distance = earthRadius * c
 
-            return distance <= 15_000
+            return distance <= 8_000 //in meters
         }
 
         suspend fun getData(path: String): JSONArray {
@@ -90,18 +90,16 @@ class NotificationReceiver : BroadcastReceiver() {
                         return jsonArray
                     }
 
-                    // Get current device location
                     val location = fusedLocationClient.lastLocation.await()
                     val userLat = location.latitude
                     val userLon = location.longitude
 
-                    // Setup time formatter
                     val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
                     timeFormat.timeZone =
-                        TimeZone.getDefault() // or use UTC if all times are stored in UTC
+                        TimeZone.getDefault()
 
                     val now = Date()
-                    val recent = 2 * 60 * 1000
+                    val recent = 2 * 60 * 1000 //2 min
 
                     for (i in snapshot.children) {
                         val key = i.key
@@ -112,17 +110,15 @@ class NotificationReceiver : BroadcastReceiver() {
 
                         if (lat == null || lon == null || spottedAt == null) continue
 
-                        // Check if nearby
                         val isNear = checkIfNear(userLat, userLon, lat.toDouble(), lon.toDouble())
 
-                        // Parse spotted_at time
                         val spottedDate: Date? = try {
                             timeFormat.parse(spottedAt)
                         } catch (e: Exception) {
                             null
                         }
 
-                        // Calculate whether time difference is within 2 minutes
+                        // Calculate whether time difference is recent
                         val isTimeClose = spottedDate?.let {
                             val nowCal = Calendar.getInstance()
                             val spottedCal = Calendar.getInstance().apply {
