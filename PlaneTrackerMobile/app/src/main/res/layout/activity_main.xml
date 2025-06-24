@@ -109,8 +109,9 @@
             android:text="Daily Statistics"
             android:textSize="16sp"
             android:textStyle="bold"
-            android:textColor="@android:color/black"
+            android:textColor="@android:color/white"
             android:layout_marginBottom="8dp"
+            android:textColorHighlight="@color/white"
             android:gravity="center" />
 
         <TextView
