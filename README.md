@@ -10,6 +10,6 @@ me see how the raspberry pi is running.
 Here is the Raspberry Pi connected to a screen which displays the device stats and the plane data it receives.
 
 # Mobile App
-![Screenshot_20250327_221935_ADSB Plane Tracker(1)](https://github.com/user-attachments/assets/5d865781-7706-4403-b1e7-e1fd96a8d875)
+![Screenshot_20250624_212920_ADSB Plane Tracker(1)](https://github.com/user-attachments/assets/af2a83c0-3a1b-4710-bcf4-dca561aa646d)
 
-This is the mobile app showing today's planes and the stats of the raspberry pi, the run switch lets me remotely stop and start the script.
+This is the mobile app made in Kotlin, it shows the total stats and the amount of diffferent planes spotted using a pie chart, the CPU temp and RAM usage of the Raspberry Pi, a run switch letting me turn the Pi on and off and a date selector which can be used to view stats from different dates by pressing the `Refresh` after selecting the desired date.
