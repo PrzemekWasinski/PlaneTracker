@@ -7,7 +7,7 @@ me see how the raspberry pi is running.
 # Current Setup
 ![pi](https://github.com/user-attachments/assets/135cd4fe-5195-4ed9-b3ac-d7d491639194)
 
-Here is the Raspberry Pi connected to a screen which displays the device stats and the plane data it receives.
+Here is the Raspberry Pi connected to a display, the display has a radar GUI which is used to display th elive positions of planes being picked up by the receiver. the display also contains a pop up menu which contains the performance stats of the Raspberry Pi, logs of planes being picked up and controls such as zoom in/out, pause and stop the tracker.
 
 # Mobile App
 ![Screenshot_20250624_212920_ADSB Plane Tracker(1)](https://github.com/user-attachments/assets/af2a83c0-3a1b-4710-bcf4-dca561aa646d)
