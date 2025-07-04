@@ -209,53 +209,73 @@ class NotificationReceiver : BroadcastReceiver() {
         suspend fun getPlanes(): JSONObject {
             val jsonArray = getData(getPath())
             var notificationText = ""
+            var title = ""
             var planeCounter = 0
+            val notificationJSON = JSONObject()
 
             val userLocation = getLocation(context)
             val userLat = userLocation.getDouble("lat")
             val userLon = userLocation.getDouble("lon")
-            notificationText = ""
 
-            for (i in 0 until jsonArray.length()) {
-                try {
-                    val plane = jsonArray.getJSONObject(i)
-                    val planeInfo = plane.keys().next()
+            if (userLat == 0.0 || userLon == 0.0) {
+                title = "Location Error"
+                notificationText = "Invalid user coordinates"
 
-                    notificationText += plane.getJSONObject(planeInfo)
-                        .getString("manufacturer") + " " + plane.getJSONObject(planeInfo)
-                        .getString("model") + ", "
-                    planeCounter++
-                } catch (e: Exception) {
-                    notificationText += e.message
+                notificationJSON.put("title", title)
+                notificationJSON.put("text", notificationText)
+                notificationJSON.put("lat", userLat)
+                notificationJSON.put("lon", userLon)
+                notificationJSON.put("empty", false)
+
+                return notificationJSON
+            } else {
+                for (i in 0 until jsonArray.length()) {
+                    try {
+                        val plane = jsonArray.getJSONObject(i)
+                        val planeInfo = plane.keys().next()
+
+                        notificationText +=
+                            plane.getJSONObject(planeInfo).getString("manufacturer") +
+                                    " " +
+                                    plane.getJSONObject(planeInfo).getString("model")
+
+                        if (i != jsonArray.length()) {
+                            notificationText += ", "
+                        }
+
+                        planeCounter++
+                    } catch (e: Exception) {
+                        notificationText += e.message
+                    }
                 }
             }
 
-            if (userLat == 0.0 || userLon == 0.0) {
-                notificationText = "Invalid user coordinates"
-                planeCounter++
-            }
+             if (planeCounter == 1) {
+                title = "1 Plane Found"
+            } else if (planeCounter > 1) {
+                title = "${planeCounter} Planes Found"
+            } else if (planeCounter == 0) {
+                 notificationJSON.put("empty", true)
 
-            if (notificationText.isEmpty()) {
-                notificationText = "No planes found"
-            }
+                 return notificationJSON
+             }
 
-            val json = JSONObject()
+            notificationJSON.put("title", title)
+            notificationJSON.put("text", notificationText)
+            notificationJSON.put("lat", userLat)
+            notificationJSON.put("lon", userLon)
+            notificationJSON.put("empty", false)
 
-            json.put("count", planeCounter)
-            json.put("text", notificationText)
-            json.put("lat", userLat)
-            json.put("lon", userLon)
-
-            return json
+            return notificationJSON
         }
 
         CoroutineScope(Dispatchers.Main).launch {
             val planeData = getPlanes()
 
-            if (planeData.getInt("count") > 0) {
+            if (!planeData.getBoolean("empty")) {
                 val notification: Notification =
                     NotificationCompat.Builder(context, "NOTIFY_CHANNEL")
-                        .setContentTitle("${planeData.getString("count")} Planes Found")
+                        .setContentTitle(planeData.getString("title"))
                         .setContentText(planeData.getString("text"))
                         .setSmallIcon(R.drawable.ic_plane_notification)
                         .setPriority(NotificationCompat.PRIORITY_MAX)

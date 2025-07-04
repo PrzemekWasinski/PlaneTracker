@@ -51,7 +51,6 @@ is_processing = False
 display_duration = 30
 fade_duration = 10    
 
-# Event to control the data collection thread
 tracker_running_event = threading.Event()
 
 def draw_text(text, font, text_col, x, y):
@@ -81,7 +80,6 @@ def check_run_status():
             else:
                 tracker_running_event.clear()
         else:
-            #Set default value if not found
             ref.update({"run": run})
             if run:
                 tracker_running_event.set()
@@ -248,8 +246,6 @@ def collect_and_process_data():
                             existing_icaos = set()
 
                     if icao not in existing_icaos:
-
-                        # Prepare row data
                         manufacturer = plane_data.get('manufacturer', '').strip()
                         model = plane_data.get('model', '').strip()
                         full_model = f"{manufacturer} {model}".strip()

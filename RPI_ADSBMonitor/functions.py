@@ -76,7 +76,7 @@ def split_message(message):
         "model": "-",
         "spotted_at": datetime.now().strftime("%H:%M:%S") or "-",
         "location_history": {},
-        "last_update_time": time.time()  #When this plane was last updated
+        "last_update_time": time.time() 
     }
 
 def clean_string(string):
