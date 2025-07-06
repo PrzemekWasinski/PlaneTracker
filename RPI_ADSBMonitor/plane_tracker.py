@@ -219,70 +219,6 @@ def collect_and_process_data():
                 #Upload to Firebase
                 try:
                     today = datetime.today().strftime("%Y-%m-%d")
-                    stats_dir = './stats_history'
-                    csv_path = os.path.join(stats_dir, f'{today}.csv')
-
-                    # Ensure stats directory exists
-                    os.makedirs(stats_dir, exist_ok=True)
-
-                    icao = plane_data.get("icao")
-                    if not icao:
-                        return  # Skip if no ICAO code
-
-                    existing_rows = []
-                    existing_icaos = set()
-
-                    # Read existing file if it exists
-                    if os.path.exists(csv_path):
-                        try:
-                            with open(csv_path, 'r', newline='', encoding='utf-8') as file:
-                                reader = csv.DictReader(file)
-                                for row in reader:
-                                    if row.get('icao'):
-                                        existing_rows.append(row)
-                                        existing_icaos.add(row['icao'])
-                        except (FileNotFoundError, PermissionError, csv.Error):
-                            existing_rows = []
-                            existing_icaos = set()
-
-                    if icao not in existing_icaos:
-                        manufacturer = plane_data.get('manufacturer', '').strip()
-                        model = plane_data.get('model', '').strip()
-                        full_model = f"{manufacturer} {model}".strip()
-
-                        row_data = {
-                            'icao': icao,
-                            'manufacturer': manufacturer,
-                            'model': full_model,
-                            'airline': plane_data.get('owner', '').strip(),
-                            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        }
-
-                        existing_rows.append(row_data)
-
-                        # Write to temp file and atomically replace original
-                        temp_file = None
-                        
-                        try:
-                            with tempfile.NamedTemporaryFile(mode='w', newline='', encoding='utf-8',
-                                                            dir=stats_dir, delete=False) as temp_file:
-                                temp_path = temp_file.name
-                                fieldnames = ['icao', 'manufacturer', 'model', 'full_model', 'airline', 'timestamp']
-                                writer = csv.DictWriter(temp_file, fieldnames=fieldnames)
-                                writer.writeheader()
-                                writer.writerows(existing_rows)
-
-                            shutil.move(temp_path, csv_path)  # Atomic move
-
-                        except Exception as e:
-                            if temp_file:
-                                try:
-                                    os.unlink(temp_file.name)
-                                except Exception:
-                                    pass
-                            print(f"Error saving plane data: {e}")
-
-                    today = datetime.today().strftime("%Y-%m-%d")
                     manufacturer = plane_data.get("manufacturer", "-")
                     model = plane_data.get("model", "-")
                     registration = plane_data.get("registration", "-")
@@ -297,7 +233,11 @@ def collect_and_process_data():
                         
                         current_data = ref.get()
                         if current_data is None:
-                            plane_data["location_history"] = {}
+                            # For new planes, create location_history with current location
+                            location_history = {}
+                            if plane_data["lat"] != "-" and plane_data["lon"] != "-":
+                                location_history[plane_data["spotted_at"]] = [plane_data["lat"], plane_data["lon"]]
+                            plane_data["location_history"] = location_history
                             ref.set(plane_data)
                         else:
                             location_history = current_data.get("location_history", {})
@@ -318,6 +258,85 @@ def collect_and_process_data():
                                 else:
                                     new_data[key] = value
                             ref.set(new_data)
+
+                        # Move CSV code outside the if/else blocks so it always runs
+                        # Save to .csv
+                        today = datetime.today().strftime("%Y-%m-%d")
+                        stats_dir = './stats_history'
+                        csv_path = os.path.join(stats_dir, f'{today}.csv')
+
+                        os.makedirs(stats_dir, exist_ok=True)
+
+                        icao = plane_data.get("icao")
+                        if icao:  # Changed from 'if not icao: return' to avoid returning from loop
+                            existing_rows = []
+
+                            if os.path.exists(csv_path):
+                                try:
+                                    with open(csv_path, 'r', newline='', encoding='utf-8') as file:
+                                        reader = csv.DictReader(file)
+                                        for row in reader:
+                                            if row.get('icao'):
+                                                existing_rows.append(row)
+                                except (FileNotFoundError, PermissionError, csv.Error):
+                                    existing_rows = []
+
+                            manufacturer = plane_data.get('manufacturer', '').strip()
+                            model = plane_data.get('model', '').strip()
+                            full_model = f"{manufacturer} {model}".strip()
+                            altitude = plane_data.get("altitude")
+
+                            row_data = {
+                                "icao": icao,
+                                "manufacturer": manufacturer,
+                                "model": model,
+                                "full_model": full_model,
+                                "airline": plane_data.get("owner", "").strip(),
+                                "location_history": plane_data.get("location_history", {}),  # Use plane_data's location_history
+                                "altitude": altitude,
+                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            }
+
+                            # Update existing row or add new one
+                            updated = False
+                            for i, existing_row in enumerate(existing_rows):
+                                if existing_row.get('icao') == icao:
+                                    existing_rows[i] = row_data
+                                    updated = True
+                                    break
+
+                            if not updated:
+                                existing_rows.append(row_data)
+
+                            temp_file = None
+                        
+                            try:
+                                with tempfile.NamedTemporaryFile(mode="w", newline="", encoding="utf-8",
+                                                                dir=stats_dir, delete=False) as temp_file:
+                                    temp_path = temp_file.name
+                                    fieldnames = [
+                                        "icao", 
+                                        "manufacturer", 
+                                        "model", 
+                                        "full_model", 
+                                        "airline", 
+                                        "location_history",
+                                        "altitude",
+                                        "timestamp",
+                                    ]
+                                    writer = csv.DictWriter(temp_file, fieldnames=fieldnames)
+                                    writer.writeheader()
+                                    writer.writerows(existing_rows)
+
+                                shutil.move(temp_path, csv_path)  
+
+                            except Exception as e:
+                                if temp_file:
+                                    try:
+                                        os.unlink(temp_file.name)
+                                    except Exception:
+                                        pass
+                                print(f"Error saving plane data: {e}")
                 except Exception as e:
                     print(f"Firebase upload error for {icao}: {e}")
             
