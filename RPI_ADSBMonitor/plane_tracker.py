@@ -18,7 +18,11 @@ import csv
 from collections import Counter
 import tempfile
 import shutil
-from functions import restart_script, connect, coords_to_xy, split_message, clean_string, get_stats
+from adsb_receiver import restart_script, connect 
+from fuctions import coords_to_xy, split_message, clean_string, process_message_queue
+from firebase_tools import firebase_watcher, check_run_status, get_stats
+from draw import draw_text, draw_text_centered, draw_fading_text
+from utils import active_planes, displayed_planes, is_receiving, is_processing, cpu_temp, ram_percentage, run, display_messages
 
 if not firebase_admin._apps: #Initialise Firebase
     cred = credentials.Certificate("./rpi-flight-tracker-firebase-adminsdk-fbsvc-a6afd2b5b0.json")
@@ -53,62 +57,7 @@ fade_duration = 10
 
 tracker_running_event = threading.Event()
 
-def draw_text(text, font, text_col, x, y):
-    img = font.render(text, True, text_col)
-    window.blit(img, (x, y))
-
-def draw_text_centered(text, font, rgb_val, x, y):
-    img = font.render(text, True, rgb_val)
-    rect = img.get_rect(center=(x, y))
-    window.blit(img, rect)
-
-def draw_fading_text(text, font, rgb_val, x, y, alpha):
-    img = font.render(text, True, rgb_val)
-    img.set_alpha(alpha)
-    rect = img.get_rect(center=(x, y))
-    window.blit(img, rect)
-
-def check_run_status():
-    global run
-    try:
-        ref = db.reference("device_stats")
-        data = ref.get()
-        if data is not None and "run" in data:
-            run = data["run"]
-            if run:
-                tracker_running_event.set()
-            else:
-                tracker_running_event.clear()
-        else:
-            ref.update({"run": run})
-            if run:
-                tracker_running_event.set()
-            else:
-                tracker_running_event.clear()
-    except Exception as error:
-        print(f"Firebase error checking run status: {error}")
-    
-    return run
-
-def firebase_watcher(): #Keep checking Firebase if run is true
-    global run
-    while True:
-        prev_run_state = run
-        current_run_state = check_run_status()
-        
-        if prev_run_state != current_run_state:
-            if current_run_state:
-                message_queue.put("Tracker activated - Starting data collection")
-                print("Tracker activated via Firebase")
-            else:
-                message_queue.put("Tracker paused via Firebase")
-                print("Tracker paused via Firebase")
-        
-        time.sleep(3) #Check every 3 seconds
-
 def collect_and_process_data():
-    global active_planes, displayed_planes, is_receiving, is_processing, cpu_temp, ram_percentage
-
     while True:
         #Wait until the tracker is set to running
         tracker_running_event.wait()
@@ -364,28 +313,18 @@ def collect_and_process_data():
 
         time.sleep(0.1)
 
-def start_data_cycle():
+def start_data_cycle(run):
     #Start the Firebase watching thread
-    watcher_thread = threading.Thread(target=firebase_watcher, daemon=True)
+    watcher_thread = threading.Thread(
+        target=firebase_watcher,
+        args=(run,), 
+        daemon=True
+    )
     watcher_thread.start()
     
     #Start the data collection thread
     data_thread = threading.Thread(target=collect_and_process_data, daemon=True)
     data_thread.start()
-
-def process_message_queue():
-    global display_messages
-    
-    while not message_queue.empty():
-        try:
-            message = message_queue.get(block=False)
-            display_messages.append(message)
-            message_queue.task_done()
-        except queue.Empty:
-            break
-    
-    if len(display_messages) > 24:
-        display_messages = display_messages[-24:]
 
 #Load images
 image1 = pygame.image.load(os.path.join("textures", "icons", "open_menu.png"))
@@ -405,15 +344,12 @@ resume_image = image6.get_rect(topleft=(685, 415))
 off_image = image7.get_rect(topleft=(735, 415))
 
 def main():
-    global cpu_temp
-    global ram_percentage
-    global run
     start_time = time.time()
     update_time = time.time()
 
     #Check run status and start threads
-    check_run_status()
-    start_data_cycle()
+    check_run_status(run)
+    start_data_cycle(run)
 
     last_update_time = time.time()
     menu_open = False
@@ -447,10 +383,10 @@ def main():
         pygame.draw.circle(window, (255, 255, 255), (400, 240), 300, 1)
         pygame.draw.circle(window, (255, 255, 255), (400, 240), 400, 1)
 
-        draw_text(str(round(range * 0.25)), text_font3, (255, 255, 255), 305, 235)
-        draw_text(str(round(range * 0.5)), text_font3, (255, 255, 255), 205, 235)
-        draw_text(str(round(range * 0.75)), text_font3, (255, 255, 255), 105, 235)
-        draw_text(str(round(range)), text_font3, (255, 255, 255), 5, 235) 
+        draw_text(window, str(round(range * 0.25)), text_font3, (255, 255, 255), 305, 235)
+        draw_text(window, str(round(range * 0.5)), text_font3, (255, 255, 255), 205, 235)
+        draw_text(window, str(round(range * 0.75)), text_font3, (255, 255, 255), 105, 235)
+        draw_text(window, str(round(range)), text_font3, (255, 255, 255), 5, 235) 
 
         pygame.draw.polygon(window, (0, 255, 255), [(400, 238), (402, 240), (400, 242), (398, 240)])  
 
@@ -487,8 +423,6 @@ def main():
                         ref.update({"run": run})
                         pygame.quit()
                         exit()
-
-        process_message_queue() #Handle messages   
 
         current_time = time.time()
     
@@ -557,8 +491,8 @@ def main():
 
             pygame.draw.rect(window, (0, 0, 0), (570, 10, 220, 460), 0, 5)
 
-            draw_text_centered(current_time, text_font2, (255, 0, 0), 675, 40)
-            draw_text_centered(f"CPU:{str(round(cpu_temp))}°C  RAM:{str(ram_percentage)}%", text_font1, (255, 255, 255), 675, 75)
+            draw_text_centered(window, current_time, text_font2, (255, 0, 0), 675, 40)
+            draw_text_centered(window, f"CPU:{str(round(cpu_temp))}°C  RAM:{str(ram_percentage)}%", text_font1, (255, 255, 255), 675, 75)
 
             #Show status 
             if is_receiving:
@@ -576,14 +510,14 @@ def main():
             elif displayed_count >= 20:
                 display_rgb = (0, 255, 0)
             
-            draw_text_centered(f"Status: {status}", text_font1, (255, 255, 255), 675, 100)
-            draw_text_centered(f"Active: {displayed_count}", text_font1, display_rgb, 675, 125)
+            draw_text_centered(window, f"Status: {status}", text_font1, (255, 255, 255), 675, 100)
+            draw_text_centered(window, f"Active: {displayed_count}", text_font1, display_rgb, 675, 125)
 
             pygame.draw.rect(window, (255, 255, 255), (580, 145, 200, 250), 2)
 
             y = 149
             for i, message in enumerate(display_messages[-24:]): 
-                draw_text(str(message), text_font3, (255, 255, 255), 585, y)
+                draw_text(window, str(message), text_font3, (255, 255, 255), 585, y)
                 y += 10
 
             window.blit(image2, (close_menu_image))
