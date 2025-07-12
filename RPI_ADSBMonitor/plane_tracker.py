@@ -15,14 +15,11 @@ import gc
 import queue
 import requests
 import csv
-from collections import Counter
 import tempfile
 import shutil
-from adsb_receiver import restart_script, connect 
-from fuctions import coords_to_xy, split_message, clean_string, process_message_queue
-from firebase_tools import firebase_watcher, check_run_status, get_stats
-from draw import draw_text, draw_text_centered, draw_fading_text
-from utils import active_planes, displayed_planes, is_receiving, is_processing, cpu_temp, ram_percentage, run, display_messages
+
+from functions import restart_script, connect, coords_to_xy, split_message, clean_string, get_stats
+from draw import draw_text, draw_fading_text, draw_text_centered
 
 if not firebase_admin._apps: #Initialise Firebase
     cred = credentials.Certificate("./rpi-flight-tracker-firebase-adminsdk-fbsvc-a6afd2b5b0.json")
@@ -57,7 +54,47 @@ fade_duration = 10
 
 tracker_running_event = threading.Event()
 
+def check_run_status():
+    global run
+    try:
+        ref = db.reference("device_stats")
+        data = ref.get()
+        if data is not None and "run" in data:
+            run = data["run"]
+            if run:
+                tracker_running_event.set()
+            else:
+                tracker_running_event.clear()
+        else:
+            ref.update({"run": run})
+            if run:
+                tracker_running_event.set()
+            else:
+                tracker_running_event.clear()
+    except Exception as error:
+        print(f"Firebase error checking run status: {error}")
+    
+    return run
+
+def firebase_watcher(): #Keep checking Firebase if run is true
+    global run
+    while True:
+        prev_run_state = run
+        current_run_state = check_run_status()
+        
+        if prev_run_state != current_run_state:
+            if current_run_state:
+                message_queue.put("Tracker activated - Starting data collection")
+                print("Tracker activated via Firebase")
+            else:
+                message_queue.put("Tracker paused via Firebase")
+                print("Tracker paused via Firebase")
+        
+        time.sleep(3) #Check every 3 seconds
+
 def collect_and_process_data():
+    global active_planes, displayed_planes, is_receiving, is_processing, cpu_temp, ram_percentage
+
     while True:
         #Wait until the tracker is set to running
         tracker_running_event.wait()
@@ -313,18 +350,28 @@ def collect_and_process_data():
 
         time.sleep(0.1)
 
-def start_data_cycle(run):
+def start_data_cycle():
     #Start the Firebase watching thread
-    watcher_thread = threading.Thread(
-        target=firebase_watcher,
-        args=(run,), 
-        daemon=True
-    )
+    watcher_thread = threading.Thread(target=firebase_watcher, daemon=True)
     watcher_thread.start()
     
     #Start the data collection thread
     data_thread = threading.Thread(target=collect_and_process_data, daemon=True)
     data_thread.start()
+
+def process_message_queue():
+    global display_messages
+    
+    while not message_queue.empty():
+        try:
+            message = message_queue.get(block=False)
+            display_messages.append(message)
+            message_queue.task_done()
+        except queue.Empty:
+            break
+    
+    if len(display_messages) > 24:
+        display_messages = display_messages[-24:]
 
 #Load images
 image1 = pygame.image.load(os.path.join("textures", "icons", "open_menu.png"))
@@ -344,12 +391,15 @@ resume_image = image6.get_rect(topleft=(685, 415))
 off_image = image7.get_rect(topleft=(735, 415))
 
 def main():
+    global cpu_temp
+    global ram_percentage
+    global run
     start_time = time.time()
     update_time = time.time()
 
     #Check run status and start threads
-    check_run_status(run)
-    start_data_cycle(run)
+    check_run_status()
+    start_data_cycle()
 
     last_update_time = time.time()
     menu_open = False
@@ -424,6 +474,8 @@ def main():
                         pygame.quit()
                         exit()
 
+        process_message_queue() #Handle messages   
+
         current_time = time.time()
     
         displayed_count = 0
@@ -481,8 +533,8 @@ def main():
                 pygame.draw.polygon(temp_surface, (*rgb_value, fade_value), [(5, 3), (7, 5), (5, 7), (3, 5)])
                 window.blit(temp_surface, (x-5, y-5))
 
-                draw_fading_text(owner_text, text_font3, (255, 255, 255), x, y - 9, fade_value)
-                draw_fading_text(plane_string, text_font3, (255, 255, 255), x, y + 9, fade_value)
+                draw_fading_text(window, owner_text, text_font3, (255, 255, 255), x, y - 9, fade_value)
+                draw_fading_text(window, plane_string, text_font3, (255, 255, 255), x, y + 9, fade_value)
             except Exception as error:
                 print(f"Drawing error for {icao}: {error}")
         

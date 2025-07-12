@@ -1,1 +1,0 @@
-global active_planes, displayed_planes, is_receiving, is_processing, cpu_temp, ram_percentage, run, display_messages
