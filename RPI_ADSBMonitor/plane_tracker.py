@@ -22,7 +22,7 @@ from functions import restart_script, connect, coords_to_xy, split_message, clea
 from draw import draw_text, draw_fading_text, draw_text_centered
 
 if not firebase_admin._apps: #Initialise Firebase
-    cred = credentials.Certificate("./rpi-flight-tracker-firebase-adminsdk-fbsvc-a6afd2b5b0.json")
+    cred = credentials.Certificate("./firebase.json")
     firebase_admin.initialize_app(cred, {
         "databaseURL": "https://rpi-flight-tracker-default-rtdb.europe-west1.firebasedatabase.app"
     })
@@ -394,8 +394,10 @@ def main():
     global cpu_temp
     global ram_percentage
     global run
+
     start_time = time.time()
     update_time = time.time()
+    last_tap_time = time.time()
 
     #Check run status and start threads
     check_run_status()
@@ -413,7 +415,7 @@ def main():
             print("Restarting plane tracker...")
             restart_script()
 
-        if current_time - update_time > 60: #Update stats every 5min
+        if current_time - update_time > 60: #Update stats every 1 min
             today = datetime.today().strftime("%Y-%m-%d")
             ref = db.reference(f"{today}/stats")
             ref.set(get_stats())
@@ -424,27 +426,14 @@ def main():
         with open("/sys/class/thermal/thermal_zone0/temp", "r") as temp: #Get CPU temp
             cpu_temp = int(temp.read()) / 1000 
 
-        mouse_x, mouse_y = pygame.mouse.get_pos() #Get mouse position
-
-        pygame.draw.rect(window, (65, 65, 65), (0, 0, width, height)) #Draw radar display
-
-        pygame.draw.circle(window, (255, 255, 255), (400, 240), 100, 1)
-        pygame.draw.circle(window, (255, 255, 255), (400, 240), 200, 1)
-        pygame.draw.circle(window, (255, 255, 255), (400, 240), 300, 1)
-        pygame.draw.circle(window, (255, 255, 255), (400, 240), 400, 1)
-
-        draw_text(window, str(round(range * 0.25)), text_font3, (255, 255, 255), 305, 235)
-        draw_text(window, str(round(range * 0.5)), text_font3, (255, 255, 255), 205, 235)
-        draw_text(window, str(round(range * 0.75)), text_font3, (255, 255, 255), 105, 235)
-        draw_text(window, str(round(range)), text_font3, (255, 255, 255), 5, 235) 
-
-        pygame.draw.polygon(window, (0, 255, 255), [(400, 238), (402, 240), (400, 242), (398, 240)])  
+        mouse_x, mouse_y = pygame.mouse.get_pos() #Get mouse position 
 
         for event in pygame.event.get(): #Listen for events
             if event.type == pygame.QUIT: #Quit event
                 pygame.quit()
                 exit()
             elif event.type == MOUSEBUTTONDOWN: #Listen for mouse clicks
+                last_tap_time = time.time()
                 if mouse_x > 755 and mouse_y > 230 and mouse_x < 795 and mouse_y < 260 and not menu_open: #Open menu button
                     menu_open = True
                 elif mouse_x > 540 and mouse_y > 230 and mouse_x < 570 and mouse_y < 260 and menu_open: #Close menu button
@@ -482,108 +471,125 @@ def main():
         potential_count = 0
         
         #Draw all planes that should be displayed
-        for icao, display_data in list(displayed_planes.items()):
-            plane = display_data["plane_data"]
-            
-            lat = plane.get("last_lat")
-            lon = plane.get("last_lon")
-            
-            #Skip planes without coordinates 
-            if lat is None or lon is None:
-                continue
+        if current_time - last_tap_time < 180: #Enable scrren saver after 3 minutes of inactivity to prevent burn ins
+            pygame.draw.rect(window, (65, 65, 65), (0, 0, width, height)) #Draw radar display
+
+            pygame.draw.circle(window, (255, 255, 255), (400, 240), 100, 1)
+            pygame.draw.circle(window, (255, 255, 255), (400, 240), 200, 1)
+            pygame.draw.circle(window, (255, 255, 255), (400, 240), 300, 1)
+            pygame.draw.circle(window, (255, 255, 255), (400, 240), 400, 1)
+
+            draw_text(window, str(round(range * 0.25)), text_font3, (255, 255, 255), 305, 235)
+            draw_text(window, str(round(range * 0.5)), text_font3, (255, 255, 255), 205, 235)
+            draw_text(window, str(round(range * 0.75)), text_font3, (255, 255, 255), 105, 235)
+            draw_text(window, str(round(range)), text_font3, (255, 255, 255), 5, 235) 
+
+            pygame.draw.polygon(window, (0, 255, 255), [(400, 238), (402, 240), (400, 242), (398, 240)]) 
+
+            for icao, display_data in list(displayed_planes.items()):
+                plane = display_data["plane_data"]
                 
-            potential_count += 1
-            
-            #Check if we have complete information 
-            owner = plane.get("owner", "-") 
-            model = plane.get('model', '-')
-            manufacturer = plane.get('manufacturer', '-')
-            
-            if not display_incomplete and (owner == "-" or model == "-" or manufacturer == "-"):
-                continue
+                lat = plane.get("last_lat")
+                lon = plane.get("last_lon")
                 
-            displayed_count += 1
-            
-            #Calculate fade based on time remaining
-            time_remaining = display_data["display_until"] - current_time
-            if time_remaining <= 0:
-                continue  
+                #Skip planes without coordinates 
+                if lat is None or lon is None:
+                    continue
+                    
+                potential_count += 1
                 
-            fade_value = 255
-            if time_remaining < fade_duration:
-                fade_value = int(255 * (time_remaining / fade_duration))
-                if fade_value < 10: 
-                    fade_value = 10
+                #Check if we have complete information 
+                owner = plane.get("owner", "-") 
+                model = plane.get('model', '-')
+                manufacturer = plane.get('manufacturer', '-')
+                
+                if not display_incomplete and (owner == "-" or model == "-" or manufacturer == "-"):
+                    continue
+                    
+                displayed_count += 1
+                
+                #Calculate fade based on time remaining
+                time_remaining = display_data["display_until"] - current_time
+                if time_remaining <= 0:
+                    continue  
+                    
+                fade_value = 255
+                if time_remaining < fade_duration:
+                    fade_value = int(255 * (time_remaining / fade_duration))
+                    if fade_value < 10: 
+                        fade_value = 10
+                
+                #Set plane rgb_val
+                if "Air Force" in owner or "Navy" in owner: #Highlights military planes in red
+                    rgb_value = (255, 0, 0)
+                elif "747" in model or "340" in model: #Highlights A340s and 747s in purple because theyre my favourite
+                    rgb_value = (255, 0, 255)
+                else:
+                    rgb_value = (255, 255, 255)
+
+                try: #Draw plane on the radar with fading effect
+                    plane_string = f"{manufacturer or '-'} {model or '-'}"
+                    owner_text = owner or "Unknown"
+                    x, y = coords_to_xy(float(lat), float(lon), range)
+
+                    temp_surface = pygame.Surface((10, 10), pygame.SRCALPHA)
+                    temp_surface.fill((0, 0, 0, 0)) 
+                    pygame.draw.polygon(temp_surface, (*rgb_value, fade_value), [(5, 3), (7, 5), (5, 7), (3, 5)])
+                    window.blit(temp_surface, (x-5, y-5))
+
+                    draw_fading_text(window, owner_text, text_font3, (255, 255, 255), x, y - 9, fade_value)
+                    draw_fading_text(window, plane_string, text_font3, (255, 255, 255), x, y + 9, fade_value)
+                except Exception as error:
+                    print(f"Drawing error for {icao}: {error}")
             
-            #Set plane rgb_val
-            if "Air Force" in owner or "Navy" in owner: #Highlights military planes in red
-                rgb_value = (255, 0, 0)
-            elif "747" in model or "340" in model: #Highlights A340s and 747s in purple because theyre my favourite
-                rgb_value = (255, 0, 255)
+            if menu_open: #Draw the menu
+                current_time = strftime("%H:%M:%S", localtime())   
+
+                pygame.draw.rect(window, (0, 0, 0), (570, 10, 220, 460), 0, 5)
+
+                draw_text_centered(window, current_time, text_font2, (255, 0, 0), 675, 40)
+                draw_text_centered(window, f"CPU:{str(round(cpu_temp))}°C  RAM:{str(ram_percentage)}%", text_font1, (255, 255, 255), 675, 75)
+
+                #Show status 
+                if is_receiving:
+                    status = "Receiving"
+                elif is_processing:
+                    status = "Processing"
+                else:
+                    status = "Idle"
+
+                display_rgb = (255, 255, 255)
+                if displayed_count < 10:
+                    display_rgb = (255, 0, 0)
+                elif displayed_count < 20:
+                    display_rgb = (255, 255, 0)
+                elif displayed_count >= 20:
+                    display_rgb = (0, 255, 0)
+                
+                draw_text_centered(window, f"Status: {status}", text_font1, (255, 255, 255), 675, 100)
+                draw_text_centered(window, f"Active: {displayed_count}", text_font1, display_rgb, 675, 125)
+
+                pygame.draw.rect(window, (255, 255, 255), (580, 145, 200, 250), 2)
+
+                y = 149
+                for i, message in enumerate(display_messages[-24:]): 
+                    draw_text(window, str(message), text_font3, (255, 255, 255), 585, y)
+                    y += 10
+
+                window.blit(image2, (close_menu_image))
+                window.blit(image3, (zoom_in_image))
+                window.blit(image4, (zoom_out_image))
+                window.blit(image7, (off_image))
+
+                if run:
+                    window.blit(image5, (pause_image))
+                else:
+                    window.blit(image6, (resume_image))
+                
             else:
-                rgb_value = (255, 255, 255)
-
-            try: #Draw plane on the radar with fading effect
-                plane_string = f"{manufacturer or '-'} {model or '-'}"
-                owner_text = owner or "Unknown"
-                x, y = coords_to_xy(float(lat), float(lon), range)
-
-                temp_surface = pygame.Surface((10, 10), pygame.SRCALPHA)
-                temp_surface.fill((0, 0, 0, 0)) 
-                pygame.draw.polygon(temp_surface, (*rgb_value, fade_value), [(5, 3), (7, 5), (5, 7), (3, 5)])
-                window.blit(temp_surface, (x-5, y-5))
-
-                draw_fading_text(window, owner_text, text_font3, (255, 255, 255), x, y - 9, fade_value)
-                draw_fading_text(window, plane_string, text_font3, (255, 255, 255), x, y + 9, fade_value)
-            except Exception as error:
-                print(f"Drawing error for {icao}: {error}")
-        
-        if menu_open: #Draw the menu
-            current_time = strftime("%H:%M:%S", localtime())   
-
-            pygame.draw.rect(window, (0, 0, 0), (570, 10, 220, 460), 0, 5)
-
-            draw_text_centered(window, current_time, text_font2, (255, 0, 0), 675, 40)
-            draw_text_centered(window, f"CPU:{str(round(cpu_temp))}°C  RAM:{str(ram_percentage)}%", text_font1, (255, 255, 255), 675, 75)
-
-            #Show status 
-            if is_receiving:
-                status = "Receiving"
-            elif is_processing:
-                status = "Processing"
-            else:
-                status = "Idle"
-
-            display_rgb = (255, 255, 255)
-            if displayed_count < 10:
-                display_rgb = (255, 0, 0)
-            elif displayed_count < 20:
-                display_rgb = (255, 255, 0)
-            elif displayed_count >= 20:
-                display_rgb = (0, 255, 0)
-            
-            draw_text_centered(window, f"Status: {status}", text_font1, (255, 255, 255), 675, 100)
-            draw_text_centered(window, f"Active: {displayed_count}", text_font1, display_rgb, 675, 125)
-
-            pygame.draw.rect(window, (255, 255, 255), (580, 145, 200, 250), 2)
-
-            y = 149
-            for i, message in enumerate(display_messages[-24:]): 
-                draw_text(window, str(message), text_font3, (255, 255, 255), 585, y)
-                y += 10
-
-            window.blit(image2, (close_menu_image))
-            window.blit(image3, (zoom_in_image))
-            window.blit(image4, (zoom_out_image))
-            window.blit(image7, (off_image))
-
-            if run:
-                window.blit(image5, (pause_image))
-            else:
-                window.blit(image6, (resume_image))
-            
+                window.blit(image1, (open_menu_image))
         else:
-            window.blit(image1, (open_menu_image))
+            pygame.draw.rect(window, (0, 0, 0), (0, 0, width, height)) #Make screen fully black
 
         pygame.display.update()
 
