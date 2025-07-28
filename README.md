@@ -13,8 +13,9 @@ The ADS-B antenna catches signals broadcasted from commercial, private and somet
 position data. Using Python the plane is then displayed on the radar screen by converting latitude and longitude into X and Y pixel values. The data is then sent to Firebase 
 which groups planes in different collections based on the date and time they were spotted. 
 
+# Mobile app
 Every minute the Kotlin app pulls data only from the most recent Firebase collection 
 and compares each plane's coordinates to the user's phone coordinates. If they are within 10Km and the plane was at those coordinates less than a minute ago that means the plane 
 is near the user and gets added to a list of all the planes that are near the user. Once all the planes have been evaluated a notification gets sent with all the planes near 
-the user. it shows the total stats and the amount of diffferent planes spotted using a pie chart, the CPU temp and RAM usage of the Raspberry Pi, a run switch letting me turn the
+the user. The mobile app shows the total stats and the amount of diffferent planes spotted using a pie chart, the CPU temp and RAM usage of the Raspberry Pi, a run switch letting me turn the
 tracker on and off and a date selector which can be used to view stats from different dates by pressing the `Refresh` after selecting the desired date. 
