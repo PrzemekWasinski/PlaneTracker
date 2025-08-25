@@ -10,6 +10,8 @@ in their live position. The Kotlin mobile app alerts the user if there are any p
 
 # How it works
 
+![antennafull(3)](https://github.com/user-attachments/assets/5c6f30fe-3fa2-4a16-ac0f-e1837f251cfc)
+
 ADS-B Plane Tracker:
 
 The Radio antenna catches ADS-B signals broadcasted from commercial, private and sometimes military planes, the data from each plane is then decoded to get the plane's flight data and 
