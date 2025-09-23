@@ -30,6 +30,7 @@ if not firebase_admin._apps: #Initialise Firebase
 SERVER_SBS = ("localhost", 30003) #ADSB port
 
 pygame.init()
+pygame.mouse.set_visible(False)
 run = False #Initialize as False until we check Firebase
 
 width = 800 #Display dimensions
@@ -85,11 +86,9 @@ def firebase_watcher(): #Keep checking Firebase if run is true
         if prev_run_state != current_run_state:
             if current_run_state:
                 message_queue.put("Tracker activated - Starting data collection")
-                print("Tracker activated via Firebase")
             else:
                 message_queue.put("Tracker paused via Firebase")
-                print("Tracker paused via Firebase")
-        
+
         time.sleep(3) #Check every 3 seconds
 
 def collect_and_process_data():
@@ -102,7 +101,7 @@ def collect_and_process_data():
         collected_messages = []
         is_receiving = True
         
-        print("Collecting ADSB data for 1 second...")
+        message_queue.put("Collecting ADSB data for 1 second...")
         sock = connect(SERVER_SBS)
         sock.settimeout(0.1)
         
@@ -144,7 +143,7 @@ def collect_and_process_data():
             
         if collected_messages:
             is_processing = True
-            print(f"Processing {len(collected_messages)} ADSB messages")
+            message_queue.put(f"Processing {len(collected_messages)} ADSB messages")
             
             #Group by ICAO code to avoid processing the same plane multiple times
             planes_by_icao = {}
@@ -153,7 +152,7 @@ def collect_and_process_data():
                 
             for icao, plane_data in planes_by_icao.items():
                 if not tracker_running_event.is_set():
-                    print("Tracker paused during processing")
+                    message_queue.put("Tracker paused during processing")
                     is_processing = False
                     break
                 #Only process the planes that have coordinates
@@ -340,7 +339,7 @@ def collect_and_process_data():
                 
             is_processing = False
             if tracker_running_event.is_set():
-                print("Processing complete")
+                message_queue.put("Processing complete")
             
         #Clean up expired planes from display 
         current_time = time.time()
@@ -382,6 +381,17 @@ image5 = pygame.image.load(os.path.join("textures", "icons", "pause.png"))
 image6 = pygame.image.load(os.path.join("textures", "icons", "resume.png"))
 image7 = pygame.image.load(os.path.join("textures", "icons", "off.png"))
 
+image8 = pygame.image.load(os.path.join("textures", "images", "25.png"))
+image9 = pygame.image.load(os.path.join("textures", "images", "50.png"))
+image10 = pygame.image.load(os.path.join("textures", "images", "75.png"))
+image11 = pygame.image.load(os.path.join("textures", "images", "100.png"))
+image12 = pygame.image.load(os.path.join("textures", "images", "125.png"))
+image13 = pygame.image.load(os.path.join("textures", "images", "150.png"))
+image14 = pygame.image.load(os.path.join("textures", "images", "175.png"))
+image15 = pygame.image.load(os.path.join("textures", "images", "200.png"))
+image16 = pygame.image.load(os.path.join("textures", "images", "225.png"))
+image17 = pygame.image.load(os.path.join("textures", "images", "250.png"))
+
 open_menu_image = image1.get_rect(center=(765, 240))
 close_menu_image = image2.get_rect(center=(550, 240))
 zoom_in_image = image3.get_rect(topleft=(585, 415))
@@ -389,6 +399,17 @@ zoom_out_image = image4.get_rect(topleft=(635, 415))
 pause_image = image5.get_rect(topleft=(685, 415))
 resume_image = image6.get_rect(topleft=(685, 415))
 off_image = image7.get_rect(topleft=(735, 415))
+
+map_25km = image8.get_rect(topleft=(0, 0))
+map_50km = image9.get_rect(topleft=(0, 0))
+map_75km = image10.get_rect(topleft=(0, 0))
+map_100km = image11.get_rect(topleft=(0, 0))
+map_125km = image12.get_rect(topleft=(0, 0))
+map_150km = image13.get_rect(topleft=(0, 0))
+map_175km = image14.get_rect(topleft=(0, 0))
+map_200km = image15.get_rect(topleft=(0, 0))
+map_225km = image16.get_rect(topleft=(0, 0))
+map_250km = image17.get_rect(topleft=(0, 0))
 
 def main():
     global cpu_temp
@@ -441,7 +462,7 @@ def main():
                 if menu_open: #Menu buttons
                     if mouse_x > 585 and mouse_y > 415 and mouse_x < 625 and mouse_y < 455 and range > 25: #Decrease range button
                         range -= 25
-                    elif mouse_x > 635 and mouse_y > 415 and mouse_x < 675 and mouse_y < 455 and range < 400: #Increase range button
+                    elif mouse_x > 635 and mouse_y > 415 and mouse_x < 675 and mouse_y < 455 and range < 250: #Increase range button
                         range += 25
                     elif mouse_x > 685 and mouse_y > 415 and mouse_x < 725 and mouse_y < 455: #Pause/resume button
                         run = not run 
@@ -472,19 +493,40 @@ def main():
         
         #Draw all planes that should be displayed
         if current_time - last_tap_time < 180: #Enable scrren saver after 3 minutes of inactivity to prevent burn ins
-            pygame.draw.rect(window, (65, 65, 65), (0, 0, width, height)) #Draw radar display
+            pygame.draw.rect(window, (0, 0, 0), (0, 0, width, height)) #Draw radar display
 
-            pygame.draw.circle(window, (255, 255, 255), (400, 240), 100, 1)
-            pygame.draw.circle(window, (255, 255, 255), (400, 240), 200, 1)
-            pygame.draw.circle(window, (255, 255, 255), (400, 240), 300, 1)
-            pygame.draw.circle(window, (255, 255, 255), (400, 240), 400, 1)
+            if range == 25:
+                window.blit(image8, (map_25km))
+            elif range == 50:
+                window.blit(image9, (map_50km))
+            elif range == 75:
+                window.blit(image10, (map_75km))
+            elif range == 100:
+                window.blit(image11, (map_100km))
+            elif range == 125:
+                window.blit(image12, (map_125km))
+            elif range == 150:
+                window.blit(image13, (map_150km))
+            elif range == 175:
+                window.blit(image14, (map_175km))
+            elif range == 200:
+                window.blit(image15, (map_200km))
+            elif range == 225:
+                window.blit(image16, (map_225km))
+            elif range == 250:
+                window.blit(image17, (map_250km))
 
-            draw_text(window, str(round(range * 0.25)), text_font3, (255, 255, 255), 305, 235)
-            draw_text(window, str(round(range * 0.5)), text_font3, (255, 255, 255), 205, 235)
-            draw_text(window, str(round(range * 0.75)), text_font3, (255, 255, 255), 105, 235)
-            draw_text(window, str(round(range)), text_font3, (255, 255, 255), 5, 235) 
+            pygame.draw.circle(window, (225, 225, 225), (400, 240), 100, 1)
+            pygame.draw.circle(window, (225, 225, 225), (400, 240), 200, 1)
+            pygame.draw.circle(window, (225, 225, 225), (400, 240), 300, 1)
+            pygame.draw.circle(window, (225, 225, 225), (400, 240), 400, 1)
 
-            pygame.draw.polygon(window, (0, 255, 255), [(400, 238), (402, 240), (400, 242), (398, 240)]) 
+            draw_text(window, str(round(range * 0.25)), text_font3, (225, 225, 225), 305, 235)
+            draw_text(window, str(round(range * 0.5)), text_font3, (225, 225, 225), 205, 235)
+            draw_text(window, str(round(range * 0.75)), text_font3, (225, 225, 225), 105, 235)
+            draw_text(window, str(round(range)), text_font3, (225, 225, 225), 5, 235) 
+
+            #pygame.draw.polygon(window, (0, 255, 255), [(400, 238), (402, 240), (400, 242), (398, 240)]) 
 
             for icao, display_data in list(displayed_planes.items()):
                 plane = display_data["plane_data"]
