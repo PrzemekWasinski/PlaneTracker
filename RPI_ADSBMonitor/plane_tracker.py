@@ -17,9 +17,9 @@ import requests
 import csv
 import tempfile
 import shutil
-
-from functions import restart_script, connect, coords_to_xy, split_message, clean_string, get_stats
+from functions import restart_script, connect, coords_to_xy, split_message, clean_string, get_stats, calculate_heading
 from draw import draw_text, draw_fading_text, draw_text_centered
+from airport_db import airports_uk
 
 if not firebase_admin._apps: #Initialise Firebase
     cred = credentials.Certificate("./firebase.json")
@@ -32,6 +32,7 @@ SERVER_SBS = ("localhost", 30003) #ADSB port
 pygame.init()
 pygame.mouse.set_visible(False)
 run = False #Initialize as False until we check Firebase
+map = False
 
 width = 800 #Display dimensions
 height = 480
@@ -54,6 +55,14 @@ display_duration = 30
 fade_duration = 10    
 
 tracker_running_event = threading.Event()
+
+device_stats_cache = { #Cache
+    "cpu_temp": 0,
+    "ram_percentage": 0,
+    "run": False,
+    "last_upload": 0
+}
+DEVICE_STATS_UPDATE_INTERVAL = 30  # Update device stats every 30 seconds instead of every cycle
 
 def check_run_status():
     global run
@@ -89,13 +98,17 @@ def firebase_watcher(): #Keep checking Firebase if run is true
             else:
                 message_queue.put("Tracker paused via Firebase")
 
-        time.sleep(3) #Check every 3 seconds
+        time.sleep(5) #Check every 5 seconds instead of 3
 
 def collect_and_process_data():
     global active_planes, displayed_planes, is_receiving, is_processing, cpu_temp, ram_percentage
+    
+    firebase_batch = []
+    BATCH_SIZE = 10  # Upload every 10 planes
+    last_batch_upload = time.time()
+    BATCH_TIMEOUT = 10  # Upload batch if 10 seconds passed
 
     while True:
-        #Wait until the tracker is set to running
         tracker_running_event.wait()
         
         collected_messages = []
@@ -156,8 +169,7 @@ def collect_and_process_data():
                     is_processing = False
                     break
                 #Only process the planes that have coordinates
-                try:
-                    #Call API to get aircraft details
+                try: #Call API to get aircraft details
                     url = f"https://hexdb.io/api/v1/aircraft/{icao}"
                     response = requests.get(url, timeout=5)
                     
@@ -189,6 +201,11 @@ def collect_and_process_data():
                 lon = plane_data.get("lon")
                 
                 if lat not in [None, "-", ""] and lon not in [None, "-", ""]:
+                    previous_plane_data = active_planes.get(icao)
+                    if previous_plane_data and "last_lat" in previous_plane_data and "last_lon" in previous_plane_data:
+                        plane_data["prev_lat"] = previous_plane_data["last_lat"]
+                        plane_data["prev_lon"] = previous_plane_data["last_lon"]
+
                     plane_data["last_lat"] = float(lat)
                     plane_data["last_lon"] = float(lon)
                     current_time = time.time()
@@ -201,148 +218,165 @@ def collect_and_process_data():
                 
                 active_planes[icao] = plane_data
                 
-                #Upload to Firebase
-                try:
+                try: #Save to CSV locally
                     today = datetime.today().strftime("%Y-%m-%d")
-                    manufacturer = plane_data.get("manufacturer", "-")
-                    model = plane_data.get("model", "-")
-                    registration = plane_data.get("registration", "-")
-                    owner = plane_data.get("owner", "-")
+                    stats_dir = './stats_history'
+                    csv_path = os.path.join(stats_dir, f'{today}.csv')
 
+                    os.makedirs(stats_dir, exist_ok=True)
+
+                    if icao:
+                        existing_rows = []
+
+                        if os.path.exists(csv_path):
+                            try:
+                                with open(csv_path, 'r', newline='', encoding='utf-8') as file:
+                                    reader = csv.DictReader(file)
+                                    for row in reader:
+                                        if row.get('icao'):
+                                            existing_rows.append(row)
+                            except (FileNotFoundError, PermissionError, csv.Error):
+                                existing_rows = []
+
+                        manufacturer = plane_data.get('manufacturer', '').strip()
+                        model = plane_data.get('model', '').strip()
+                        full_model = f"{manufacturer} {model}".strip()
+                        altitude = plane_data.get("altitude")
+
+                        location_history = {} # Build location history from existing data
+                        for existing_row in existing_rows:
+                            if existing_row.get('icao') == icao: # Parse existing location history
+                                existing_history = existing_row.get('location_history', '{}')
+                                if existing_history and existing_history != '{}':
+                                    try:
+                                        import ast
+                                        location_history = ast.literal_eval(existing_history)
+                                    except:
+                                        location_history = {}
+                                break
+                        
+                        if plane_data["lat"] != "-" and plane_data["lon"] != "-": 
+                            location_history[plane_data["spotted_at"]] = [plane_data["lat"], plane_data["lon"]]
+
+                        row_data = {
+                            "icao": icao,
+                            "manufacturer": manufacturer,
+                            "model": model,
+                            "full_model": full_model,
+                            "airline": plane_data.get("owner", "").strip(),
+                            "location_history": str(location_history),  
+                            "altitude": altitude,
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+
+                        updated = False #Update existing row or add new one
+                        for i, existing_row in enumerate(existing_rows):
+                            if existing_row.get('icao') == icao:
+                                existing_rows[i] = row_data
+                                updated = True
+                                break
+
+                        if not updated:
+                            existing_rows.append(row_data)
+
+                        temp_file = None
+                    
+                        try:
+                            with tempfile.NamedTemporaryFile(mode="w", newline="", encoding="utf-8", dir=stats_dir, delete=False) as temp_file:
+                                temp_path = temp_file.name
+                                fieldnames = [
+                                    "icao", 
+                                    "manufacturer", 
+                                    "model", 
+                                    "full_model", 
+                                    "airline", 
+                                    "location_history",
+                                    "altitude",
+                                    "timestamp",
+                                ]
+                                writer = csv.DictWriter(temp_file, fieldnames=fieldnames)
+                                writer.writeheader()
+                                writer.writerows(existing_rows)
+
+                            shutil.move(temp_path, csv_path)  
+
+                        except Exception as e:
+                            if temp_file:
+                                try:
+                                    os.unlink(temp_file.name)
+                                except Exception:
+                                    pass
+                            print(f"Error saving plane data: {e}")
+                except Exception as e:
+                    print(f"CSV save error for {icao}: {e}")
+                
+                manufacturer = plane_data.get("manufacturer", "-")
+                model = plane_data.get("model", "-")
+                registration = plane_data.get("registration", "-")
+                owner = plane_data.get("owner", "-")
+                
+                if manufacturer != "-" and model != "-" and registration != "-" and owner != "-":
+                    firebase_data = {key: value for key, value in plane_data.items() 
+                                   if key not in ["location_history", "last_update_time", "last_lat", "last_lon"]}
+                    
                     min = strftime("%M", localtime())
                     hour = strftime("%H", localtime())
                     time_10 = f"{hour}:{min[:-1] + '0'}"
+                    today = datetime.today().strftime("%Y-%m-%d")
                     
-                    if manufacturer != "-" and model != "-" and registration != "-" and owner != "-":
-                        ref = db.reference(f"{today}/{time_10}/{manufacturer}-{model}-({registration})-{owner}")
-                        
+                    firebase_batch.append({
+                        "path": f"{today}/{time_10}/{manufacturer}-{model}-({registration})-{owner}",
+                        "data": firebase_data
+                    })
+            
+            current_time = time.time()
+            if len(firebase_batch) >= BATCH_SIZE or (firebase_batch and current_time - last_batch_upload > BATCH_TIMEOUT):
+                try:
+                    for item in firebase_batch:
+                        ref = db.reference(item["path"])
                         current_data = ref.get()
+                        
                         if current_data is None:
-                            # For new planes, create location_history with current location
-                            location_history = {}
-                            if plane_data["lat"] != "-" and plane_data["lon"] != "-":
-                                location_history[plane_data["spotted_at"]] = [plane_data["lat"], plane_data["lon"]]
-                            plane_data["location_history"] = location_history
-                            ref.set(plane_data)
+                            ref.set(item["data"])
                         else:
-                            location_history = current_data.get("location_history", {})
-                            
-                            if plane_data["lat"] != "-" and plane_data["lon"] != "-":
-                                location_history[plane_data["spotted_at"]] = [plane_data["lat"], plane_data["lon"]]
-                                plane_data["location_history"] = location_history
-                            else:
-                                plane_data["location_history"] = location_history
-                                
                             new_data = {}
-                            for key, value in plane_data.items():
-                                if key in ["last_update_time"]:  
-                                    continue
+                            for key, value in item["data"].items():
                                 current_value = current_data.get(key)
                                 if value == "-" or value == []:
                                     new_data[key] = current_value
                                 else:
                                     new_data[key] = value
-                            ref.set(new_data)
-
-                        # Move CSV code outside the if/else blocks so it always runs
-                        # Save to .csv
-                        today = datetime.today().strftime("%Y-%m-%d")
-                        stats_dir = './stats_history'
-                        csv_path = os.path.join(stats_dir, f'{today}.csv')
-
-                        os.makedirs(stats_dir, exist_ok=True)
-
-                        icao = plane_data.get("icao")
-                        if icao:  # Changed from 'if not icao: return' to avoid returning from loop
-                            existing_rows = []
-
-                            if os.path.exists(csv_path):
-                                try:
-                                    with open(csv_path, 'r', newline='', encoding='utf-8') as file:
-                                        reader = csv.DictReader(file)
-                                        for row in reader:
-                                            if row.get('icao'):
-                                                existing_rows.append(row)
-                                except (FileNotFoundError, PermissionError, csv.Error):
-                                    existing_rows = []
-
-                            manufacturer = plane_data.get('manufacturer', '').strip()
-                            model = plane_data.get('model', '').strip()
-                            full_model = f"{manufacturer} {model}".strip()
-                            altitude = plane_data.get("altitude")
-
-                            row_data = {
-                                "icao": icao,
-                                "manufacturer": manufacturer,
-                                "model": model,
-                                "full_model": full_model,
-                                "airline": plane_data.get("owner", "").strip(),
-                                "location_history": plane_data.get("location_history", {}),  # Use plane_data's location_history
-                                "altitude": altitude,
-                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            }
-
-                            # Update existing row or add new one
-                            updated = False
-                            for i, existing_row in enumerate(existing_rows):
-                                if existing_row.get('icao') == icao:
-                                    existing_rows[i] = row_data
-                                    updated = True
-                                    break
-
-                            if not updated:
-                                existing_rows.append(row_data)
-
-                            temp_file = None
-                        
-                            try:
-                                with tempfile.NamedTemporaryFile(mode="w", newline="", encoding="utf-8",
-                                                                dir=stats_dir, delete=False) as temp_file:
-                                    temp_path = temp_file.name
-                                    fieldnames = [
-                                        "icao", 
-                                        "manufacturer", 
-                                        "model", 
-                                        "full_model", 
-                                        "airline", 
-                                        "location_history",
-                                        "altitude",
-                                        "timestamp",
-                                    ]
-                                    writer = csv.DictWriter(temp_file, fieldnames=fieldnames)
-                                    writer.writeheader()
-                                    writer.writerows(existing_rows)
-
-                                shutil.move(temp_path, csv_path)  
-
-                            except Exception as e:
-                                if temp_file:
-                                    try:
-                                        os.unlink(temp_file.name)
-                                    except Exception:
-                                        pass
-                                print(f"Error saving plane data: {e}")
+                            ref.update(new_data)
+                    
+                    message_queue.put(f"Uploaded {len(firebase_batch)} planes to Firebase")
+                    firebase_batch = []
+                    last_batch_upload = current_time
                 except Exception as e:
-                    print(f"Firebase upload error for {icao}: {e}")
+                    print(f"Firebase batch upload error: {e}")
+                    firebase_batch = []
             
-            #Update device stats only if run is true
             if tracker_running_event.is_set():
-                try:
-                    stats_ref = db.reference("device_stats")
-                    stats_ref.update({
-                        "cpu_temp": cpu_temp,
-                        "ram_percentage": ram_percentage,
-                        "run": run
-                    })
-                except Exception as e:
-                    print(f"Error updating device stats: {e}")
+                device_stats_cache["cpu_temp"] = cpu_temp
+                device_stats_cache["ram_percentage"] = ram_percentage
+                device_stats_cache["run"] = run
+                
+                if current_time - device_stats_cache["last_upload"] > DEVICE_STATS_UPDATE_INTERVAL:
+                    try:
+                        stats_ref = db.reference("device_stats")
+                        stats_ref.update({
+                            "cpu_temp": device_stats_cache["cpu_temp"],
+                            "ram_percentage": device_stats_cache["ram_percentage"],
+                            "run": device_stats_cache["run"]
+                        })
+                        device_stats_cache["last_upload"] = current_time
+                    except Exception as e:
+                        print(f"Error updating device stats: {e}")
                 
             is_processing = False
             if tracker_running_event.is_set():
                 message_queue.put("Processing complete")
             
-        #Clean up expired planes from display 
-        current_time = time.time()
+        current_time = time.time()#Clean up expired planes from display 
         for icao in list(displayed_planes.keys()):
             if displayed_planes[icao]["display_until"] < current_time:
                 del displayed_planes[icao]
@@ -350,12 +384,10 @@ def collect_and_process_data():
         time.sleep(0.1)
 
 def start_data_cycle():
-    #Start the Firebase watching thread
-    watcher_thread = threading.Thread(target=firebase_watcher, daemon=True)
+    watcher_thread = threading.Thread(target=firebase_watcher, daemon=True) #Start the Firebase watching thread
     watcher_thread.start()
     
-    #Start the data collection thread
-    data_thread = threading.Thread(target=collect_and_process_data, daemon=True)
+    data_thread = threading.Thread(target=collect_and_process_data, daemon=True) #Start the data collection thread
     data_thread.start()
 
 def process_message_queue():
@@ -372,7 +404,6 @@ def process_message_queue():
     if len(display_messages) > 24:
         display_messages = display_messages[-24:]
 
-#Load images
 image1 = pygame.image.load(os.path.join("textures", "icons", "open_menu.png"))
 image2 = pygame.image.load(os.path.join("textures", "icons", "close_menu.png"))
 image3 = pygame.image.load(os.path.join("textures", "icons", "zoom_in.png"))
@@ -380,6 +411,8 @@ image4 = pygame.image.load(os.path.join("textures", "icons", "zoom_out.png"))
 image5 = pygame.image.load(os.path.join("textures", "icons", "pause.png"))
 image6 = pygame.image.load(os.path.join("textures", "icons", "resume.png"))
 image7 = pygame.image.load(os.path.join("textures", "icons", "off.png"))
+plane_icon = pygame.image.load(os.path.join("textures", "icons", "plane.png")).convert_alpha()
+dot_icon = pygame.image.load(os.path.join("textures", "icons", "dot.png")).convert_alpha()
 
 image8 = pygame.image.load(os.path.join("textures", "images", "25.png"))
 image9 = pygame.image.load(os.path.join("textures", "images", "50.png"))
@@ -491,30 +524,33 @@ def main():
         displayed_count = 0
         potential_count = 0
         
-        #Draw all planes that should be displayed
+        #Draw all planes 
         if current_time - last_tap_time < 180: #Enable scrren saver after 3 minutes of inactivity to prevent burn ins
             pygame.draw.rect(window, (0, 0, 0), (0, 0, width, height)) #Draw radar display
 
-            if range == 25:
-                window.blit(image8, (map_25km))
-            elif range == 50:
-                window.blit(image9, (map_50km))
-            elif range == 75:
-                window.blit(image10, (map_75km))
-            elif range == 100:
-                window.blit(image11, (map_100km))
-            elif range == 125:
-                window.blit(image12, (map_125km))
-            elif range == 150:
-                window.blit(image13, (map_150km))
-            elif range == 175:
-                window.blit(image14, (map_175km))
-            elif range == 200:
-                window.blit(image15, (map_200km))
-            elif range == 225:
-                window.blit(image16, (map_225km))
-            elif range == 250:
-                window.blit(image17, (map_250km))
+            if map:
+                if range == 25:
+                    window.blit(image8, (map_25km))
+                elif range == 50:
+                    window.blit(image9, (map_50km))
+                elif range == 75:
+                    window.blit(image10, (map_75km))
+                elif range == 100:
+                    window.blit(image11, (map_100km))
+                elif range == 125:
+                    window.blit(image12, (map_125km))
+                elif range == 150:
+                    window.blit(image13, (map_150km))
+                elif range == 175:
+                    window.blit(image14, (map_175km))
+                elif range == 200:
+                    window.blit(image15, (map_200km))
+                elif range == 225:
+                    window.blit(image16, (map_225km))
+                elif range == 250:
+                    window.blit(image17, (map_250km))
+            else: 
+                pygame.draw.rect(window, (0, 0, 0), (0, 0, width, height))
 
             pygame.draw.circle(window, (225, 225, 225), (400, 240), 100, 1)
             pygame.draw.circle(window, (225, 225, 225), (400, 240), 200, 1)
@@ -525,22 +561,29 @@ def main():
             draw_text(window, str(round(range * 0.5)), text_font3, (225, 225, 225), 205, 235)
             draw_text(window, str(round(range * 0.75)), text_font3, (225, 225, 225), 105, 235)
             draw_text(window, str(round(range)), text_font3, (225, 225, 225), 5, 235) 
+           
+            if not map:
+                pygame.draw.polygon(window, (0, 255, 255), [(400, 238), (402, 240), (400, 242), (398, 240)]) 
 
-            #pygame.draw.polygon(window, (0, 255, 255), [(400, 238), (402, 240), (400, 242), (398, 240)]) 
+            for key in airports_uk:
+                airport = airports_uk[key]
+                x, y = coords_to_xy(airport["lat"], airport["lon"], range)
+                pygame.draw.polygon(window, (0, 0, 255), [(x, y - 2), (x + 2, y), (x, y + 2), (x - 2, y)]) 
+                draw_text_centered(window, airport["airport_name"], text_font3, (255, 255, 255), x, y - 10)
 
             for icao, display_data in list(displayed_planes.items()):
                 plane = display_data["plane_data"]
                 
                 lat = plane.get("last_lat")
                 lon = plane.get("last_lon")
-                
-                #Skip planes without coordinates 
+                prev_lat = plane.get("prev_lat")
+                prev_lon = plane.get("prev_lon")
+
                 if lat is None or lon is None:
                     continue
                     
                 potential_count += 1
                 
-                #Check if we have complete information 
                 owner = plane.get("owner", "-") 
                 model = plane.get('model', '-')
                 manufacturer = plane.get('manufacturer', '-')
@@ -550,7 +593,6 @@ def main():
                     
                 displayed_count += 1
                 
-                #Calculate fade based on time remaining
                 time_remaining = display_data["display_until"] - current_time
                 if time_remaining <= 0:
                     continue  
@@ -574,13 +616,27 @@ def main():
                     owner_text = owner or "Unknown"
                     x, y = coords_to_xy(float(lat), float(lon), range)
 
-                    temp_surface = pygame.Surface((10, 10), pygame.SRCALPHA)
-                    temp_surface.fill((0, 0, 0, 0)) 
-                    pygame.draw.polygon(temp_surface, (*rgb_value, fade_value), [(5, 3), (7, 5), (5, 7), (3, 5)])
-                    window.blit(temp_surface, (x-5, y-5))
-
-                    draw_fading_text(window, owner_text, text_font3, (255, 255, 255), x, y - 9, fade_value)
-                    draw_fading_text(window, plane_string, text_font3, (255, 255, 255), x, y + 9, fade_value)
+                    # If we have previous coordinates, draw rotated plane, otherwise a dot
+                    if prev_lat is not None and prev_lon is not None:
+                        heading = calculate_heading(prev_lat, prev_lon, lat, lon)
+                        
+                        # Create a copy of the icon to color it
+                        colored_icon = plane_icon.copy()
+                        colored_icon.fill(rgb_value, special_flags=pygame.BLEND_RGB_MULT)
+                        colored_icon.set_alpha(fade_value)
+                        
+                        rotated_image = pygame.transform.rotate(colored_icon, heading)
+                        new_rect = rotated_image.get_rect(center=(x, y))
+                        window.blit(rotated_image, new_rect)
+                    else:
+                        # Draw a yellow dot for planes with no heading info yet
+                        dot_icon_copy = dot_icon.copy()
+                        dot_icon_copy.set_alpha(fade_value)
+                        new_rect = dot_icon_copy.get_rect(center=(x, y))
+                        window.blit(dot_icon_copy, new_rect)
+                        
+                    draw_fading_text(window, owner_text, text_font3, (255, 202, 0), x, y - 13, fade_value)
+                    draw_fading_text(window, plane_string, text_font3, (255, 202, 0), x, y + 13, fade_value)
                 except Exception as error:
                     print(f"Drawing error for {icao}: {error}")
             

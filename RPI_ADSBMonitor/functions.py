@@ -74,6 +74,15 @@ def split_message(message):
         "last_update_time": time.time()  #When this plane was last updated
     }
 
+def calculate_heading(lat1, lon1, lat2, lon2):
+    lat1_rad = math.radians(lat1)
+    lon1_rad = math.radians(lon1)
+    lat2_rad = math.radians(lat2)
+    lon2_rad = math.radians(lon2)
+    y = math.sin(lon2_rad - lon1_rad) * math.cos(lat2_rad)
+    x = math.cos(lat1_rad) * math.sin(lat2_rad) - math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(lon2_rad - lon1_rad)
+    return -math.degrees(math.atan2(y, x)) 
+
 def clean_string(string):
     return re.sub(r"[\/\\\.,:]", " ", string)
 
