@@ -11,12 +11,13 @@ from time import localtime, strftime
 import psutil
 import os
 import threading
-import gc 
+import gc
 import queue
 import requests
 import csv
 import tempfile
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functions import restart_script, connect, coords_to_xy, split_message, clean_string, get_stats, calculate_heading
 from draw import draw_text, draw_fading_text, draw_text_centered
 from airport_db import airports_uk
@@ -86,19 +87,53 @@ def check_run_status():
     
     return run
 
+def fetch_plane_api_data(icao):
+    """Fetch plane metadata from API for a single ICAO code"""
+    try:
+        url = f"https://hexdb.io/api/v1/aircraft/{icao}"
+        response = requests.get(url, timeout=5)
+
+        if response.status_code == 200:
+            api_data = response.json()
+            manufacturer = clean_string(str(api_data.get("Manufacturer", "-")))
+            registration = clean_string(str(api_data.get("Registration", "-")))
+            owner = clean_string(str(api_data.get("RegisteredOwners", "-")))
+            model = clean_string(str(api_data.get("Type", "-")))
+
+            if manufacturer == "Avions de Transport Regional":
+                manufacturer = "ATR"
+            elif manufacturer == "Honda Aircraft Company":
+                manufacturer = "Honda"
+
+            return {
+                "icao": icao,
+                "manufacturer": manufacturer,
+                "registration": registration,
+                "icao_type_code": clean_string(str(api_data.get("ICAOTypeCode", "-"))),
+                "code_mode_s": clean_string(str(api_data.get("ModeS", "-"))),
+                "operator_flag": clean_string(str(api_data.get("OperatorFlagCode", "-"))),
+                "owner": owner,
+                "model": model,
+                "success": True
+            }
+    except Exception as e:
+        print(f"API error for {icao}: {e}")
+
+    return {"icao": icao, "success": False}
+
 def firebase_watcher(): #Keep checking Firebase if run is true
     global run
     while True:
         prev_run_state = run
         current_run_state = check_run_status()
-        
+
         if prev_run_state != current_run_state:
             if current_run_state:
                 message_queue.put("Tracker activated - Starting data collection")
             else:
                 message_queue.put("Tracker paused via Firebase")
 
-        time.sleep(5) #Check every 5 seconds instead of 3
+        time.sleep(5) #Check every 5 seconds 
 
 def collect_and_process_data():
     global active_planes, displayed_planes, is_receiving, is_processing, cpu_temp, ram_percentage
@@ -114,12 +149,12 @@ def collect_and_process_data():
         collected_messages = []
         is_receiving = True
         
-        message_queue.put("Collecting ADSB data for 1 second...")
+        message_queue.put("Collecting ADSB data for 1 seconds")
         sock = connect(SERVER_SBS)
         sock.settimeout(0.1)
         
         buffer = ""
-        end_time = time.time() + 1.0  
+        end_time = time.time() + 1
         
         try:
             while time.time() < end_time and tracker_running_event.is_set():
@@ -156,50 +191,65 @@ def collect_and_process_data():
             
         if collected_messages:
             is_processing = True
+            processing_start_time = time.time()
             message_queue.put(f"Processing {len(collected_messages)} ADSB messages")
-            
+
             #Group by ICAO code to avoid processing the same plane multiple times
             planes_by_icao = {}
             for plane_data in collected_messages:
                 planes_by_icao[plane_data['icao']] = plane_data
-                
+
+            # Identify which planes need API calls
+            icaos_needing_api = []
+            for icao, plane_data in planes_by_icao.items():
+                cached_plane = active_planes.get(icao)
+                if not (cached_plane and cached_plane.get("manufacturer") != "-" and cached_plane.get("model") != "-"):
+                    icaos_needing_api.append(icao)
+                else:
+                    # Use cached data immediately
+                    plane_data["manufacturer"] = cached_plane["manufacturer"]
+                    plane_data["registration"] = cached_plane["registration"]
+                    plane_data["icao_type_code"] = cached_plane["icao_type_code"]
+                    plane_data["code_mode_s"] = cached_plane["code_mode_s"]
+                    plane_data["operator_flag"] = cached_plane["operator_flag"]
+                    plane_data["owner"] = cached_plane["owner"]
+                    plane_data["model"] = cached_plane["model"]
+
+            # Fetch all new planes in parallel
+            api_results = {}
+            if icaos_needing_api:
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    future_to_icao = {executor.submit(fetch_plane_api_data, icao): icao for icao in icaos_needing_api}
+                    for future in as_completed(future_to_icao):
+                        result = future.result()
+                        if result["success"]:
+                            api_results[result["icao"]] = result
+                            message_queue.put(f"New: {result['manufacturer']} {result['model']}")
+
+            # Apply API results to plane data
+            for icao in icaos_needing_api:
+                if icao in api_results:
+                    result = api_results[icao]
+                    plane_data = planes_by_icao[icao]
+                    plane_data["manufacturer"] = result["manufacturer"]
+                    plane_data["registration"] = result["registration"]
+                    plane_data["icao_type_code"] = result["icao_type_code"]
+                    plane_data["code_mode_s"] = result["code_mode_s"]
+                    plane_data["operator_flag"] = result["operator_flag"]
+                    plane_data["owner"] = result["owner"]
+                    plane_data["model"] = result["model"]
+
+            # Process all planes for display and update active_planes
+            csv_updates = []
             for icao, plane_data in planes_by_icao.items():
                 if not tracker_running_event.is_set():
                     message_queue.put("Tracker paused during processing")
                     is_processing = False
                     break
-                #Only process the planes that have coordinates
-                try: #Call API to get aircraft details
-                    url = f"https://hexdb.io/api/v1/aircraft/{icao}"
-                    response = requests.get(url, timeout=5)
-                    
-                    if response.status_code == 200:
-                        api_data = response.json()
-                        manufacturer = clean_string(str(api_data.get("Manufacturer", "-")))
-                        registration = clean_string(str(api_data.get("Registration", "-")))
-                        owner = clean_string(str(api_data.get("RegisteredOwners", "-")))
-                        model = clean_string(str(api_data.get("Type", "-")))
-                        
-                        if manufacturer == "Avions de Transport Regional":
-                            manufacturer = "ATR"
-                        elif manufacturer == "Honda Aircraft Company":
-                            manufacturer = "Honda"
-                            
-                        plane_data["manufacturer"] = manufacturer
-                        plane_data["registration"] = registration
-                        plane_data["icao_type_code"] = clean_string(str(api_data.get("ICAOTypeCode", "-")))
-                        plane_data["code_mode_s"] = clean_string(str(api_data.get("ModeS", "-")))
-                        plane_data["operator_flag"] = clean_string(str(api_data.get("OperatorFlagCode", "-")))
-                        plane_data["owner"] = owner
-                        plane_data["model"] = model
-                        
-                        message_queue.put(f"{manufacturer} {model}")
-                except Exception as e:
-                    print(f"API error for {icao}: {e}")
-                    
+
                 lat = plane_data.get("lat")
                 lon = plane_data.get("lon")
-                
+
                 if lat not in [None, "-", ""] and lon not in [None, "-", ""]:
                     previous_plane_data = active_planes.get(icao)
                     if previous_plane_data and "last_lat" in previous_plane_data and "last_lon" in previous_plane_data:
@@ -210,14 +260,17 @@ def collect_and_process_data():
                     plane_data["last_lon"] = float(lon)
                     current_time = time.time()
                     plane_data["last_update_time"] = current_time
-                    
+
                     displayed_planes[icao] = {
                         "plane_data": plane_data,
                         "display_until": current_time + display_duration
                     }
-                
+
                 active_planes[icao] = plane_data
-                
+                csv_updates.append((icao, plane_data))
+
+            # Batch CSV write - do all planes at once
+            if csv_updates:
                 try: #Save to CSV locally
                     today = datetime.today().strftime("%Y-%m-%d")
                     stats_dir = './stats_history'
@@ -225,37 +278,40 @@ def collect_and_process_data():
 
                     os.makedirs(stats_dir, exist_ok=True)
 
-                    if icao:
-                        existing_rows = []
+                    # Read existing CSV once
+                    existing_rows = []
+                    existing_by_icao = {}
+                    if os.path.exists(csv_path):
+                        try:
+                            with open(csv_path, 'r', newline='', encoding='utf-8') as file:
+                                reader = csv.DictReader(file)
+                                for row in reader:
+                                    if row.get('icao'):
+                                        existing_rows.append(row)
+                                        existing_by_icao[row['icao']] = row
+                        except (FileNotFoundError, PermissionError, csv.Error):
+                            existing_rows = []
+                            existing_by_icao = {}
 
-                        if os.path.exists(csv_path):
-                            try:
-                                with open(csv_path, 'r', newline='', encoding='utf-8') as file:
-                                    reader = csv.DictReader(file)
-                                    for row in reader:
-                                        if row.get('icao'):
-                                            existing_rows.append(row)
-                            except (FileNotFoundError, PermissionError, csv.Error):
-                                existing_rows = []
-
+                    # Update/add all planes in one go
+                    for icao, plane_data in csv_updates:
                         manufacturer = plane_data.get('manufacturer', '').strip()
                         model = plane_data.get('model', '').strip()
                         full_model = f"{manufacturer} {model}".strip()
                         altitude = plane_data.get("altitude")
 
-                        location_history = {} # Build location history from existing data
-                        for existing_row in existing_rows:
-                            if existing_row.get('icao') == icao: # Parse existing location history
-                                existing_history = existing_row.get('location_history', '{}')
-                                if existing_history and existing_history != '{}':
-                                    try:
-                                        import ast
-                                        location_history = ast.literal_eval(existing_history)
-                                    except:
-                                        location_history = {}
-                                break
-                        
-                        if plane_data["lat"] != "-" and plane_data["lon"] != "-": 
+                        # Build location history from existing data
+                        location_history = {}
+                        if icao in existing_by_icao:
+                            existing_history = existing_by_icao[icao].get('location_history', '{}')
+                            if existing_history and existing_history != '{}':
+                                try:
+                                    import ast
+                                    location_history = ast.literal_eval(existing_history)
+                                except:
+                                    location_history = {}
+
+                        if plane_data["lat"] != "-" and plane_data["lon"] != "-":
                             location_history[plane_data["spotted_at"]] = [plane_data["lat"], plane_data["lon"]]
 
                         row_data = {
@@ -264,66 +320,68 @@ def collect_and_process_data():
                             "model": model,
                             "full_model": full_model,
                             "airline": plane_data.get("owner", "").strip(),
-                            "location_history": str(location_history),  
+                            "location_history": str(location_history),
                             "altitude": altitude,
                             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         }
 
-                        updated = False #Update existing row or add new one
-                        for i, existing_row in enumerate(existing_rows):
-                            if existing_row.get('icao') == icao:
-                                existing_rows[i] = row_data
-                                updated = True
-                                break
-
-                        if not updated:
+                        # Update existing or append new
+                        if icao in existing_by_icao:
+                            for i, existing_row in enumerate(existing_rows):
+                                if existing_row.get('icao') == icao:
+                                    existing_rows[i] = row_data
+                                    break
+                        else:
                             existing_rows.append(row_data)
+                        existing_by_icao[icao] = row_data
 
-                        temp_file = None
-                    
-                        try:
-                            with tempfile.NamedTemporaryFile(mode="w", newline="", encoding="utf-8", dir=stats_dir, delete=False) as temp_file:
-                                temp_path = temp_file.name
-                                fieldnames = [
-                                    "icao", 
-                                    "manufacturer", 
-                                    "model", 
-                                    "full_model", 
-                                    "airline", 
-                                    "location_history",
-                                    "altitude",
-                                    "timestamp",
-                                ]
-                                writer = csv.DictWriter(temp_file, fieldnames=fieldnames)
-                                writer.writeheader()
-                                writer.writerows(existing_rows)
+                    # Write CSV once for all planes
+                    temp_file = None
+                    try:
+                        with tempfile.NamedTemporaryFile(mode="w", newline="", encoding="utf-8", dir=stats_dir, delete=False) as temp_file:
+                            temp_path = temp_file.name
+                            fieldnames = [
+                                "icao",
+                                "manufacturer",
+                                "model",
+                                "full_model",
+                                "airline",
+                                "location_history",
+                                "altitude",
+                                "timestamp",
+                            ]
+                            writer = csv.DictWriter(temp_file, fieldnames=fieldnames)
+                            writer.writeheader()
+                            writer.writerows(existing_rows)
 
-                            shutil.move(temp_path, csv_path)  
+                        shutil.move(temp_path, csv_path)
 
-                        except Exception as e:
-                            if temp_file:
-                                try:
-                                    os.unlink(temp_file.name)
-                                except Exception:
-                                    pass
-                            print(f"Error saving plane data: {e}")
+                    except Exception as e:
+                        if temp_file:
+                            try:
+                                os.unlink(temp_file.name)
+                            except Exception:
+                                pass
+                        print(f"Error saving plane data: {e}")
                 except Exception as e:
-                    print(f"CSV save error for {icao}: {e}")
-                
+                    print(f"CSV save error: {e}")
+
+            # Prepare Firebase batch for all planes
+            for icao, plane_data in planes_by_icao.items():
                 manufacturer = plane_data.get("manufacturer", "-")
                 model = plane_data.get("model", "-")
                 registration = plane_data.get("registration", "-")
                 owner = plane_data.get("owner", "-")
-                
+
                 if manufacturer != "-" and model != "-" and registration != "-" and owner != "-":
-                    firebase_data = {key: value for key, value in plane_data.items() 
+                    firebase_data = {key: value for key, value in plane_data.items()
                                    if key not in ["location_history", "last_update_time", "last_lat", "last_lon"]}
-                    
+
                     min = strftime("%M", localtime())
                     hour = strftime("%H", localtime())
                     time_10 = f"{hour}:{min[:-1] + '0'}"
                     today = datetime.today().strftime("%Y-%m-%d")
-                    
+
                     firebase_batch.append({
                         "path": f"{today}/{time_10}/{manufacturer}-{model}-({registration})-{owner}",
                         "data": firebase_data
@@ -374,7 +432,8 @@ def collect_and_process_data():
                 
             is_processing = False
             if tracker_running_event.is_set():
-                message_queue.put("Processing complete")
+                processing_duration = time.time() - processing_start_time
+                message_queue.put(f"Processing complete ({processing_duration:.3f}s)")
             
         current_time = time.time()#Clean up expired planes from display 
         for icao in list(displayed_planes.keys()):

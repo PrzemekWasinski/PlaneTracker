@@ -13,7 +13,6 @@ import os
 from datetime import datetime
 from time import strftime, localtime
 from collections import Counter
-import portalocker
 
 def restart_script(): #Function to restart the script
     print("Restarting script")
@@ -36,15 +35,12 @@ def coords_to_xy(lat, lon, range_km): #Converts coordinates to pixel positions f
 
     screen_width = 800
     screen_height = 480
+    km_per_px = (range_km * 2) / screen_width
 
     delta_lat = lat - centre_lat
     delta_lon = lon - centre_lon
-
     dy = delta_lat * 111  
     dx = delta_lon * 111 * math.cos(math.radians(centre_lat)) 
-
-    km_per_px = (range_km * 2) / screen_width
-
     x = screen_width // 2 + int(dx / km_per_px)
     y = screen_height // 2 - int(dy / km_per_px)  
 
@@ -115,7 +111,6 @@ def get_stats():
                 model = row.get('model', '').strip()
                 airline = row.get('airline', '').strip()
 
-                # Skip row if any key field is "-"
                 if '-' in (manufacturer, model, airline):
                     continue
 
@@ -128,7 +123,6 @@ def get_stats():
             if not planes:
                 return default_stats
 
-            # Count occurrences
             model_counter = Counter(p['model'] for p in planes)
             manufacturer_counter = Counter(p['manufacturer'] for p in planes)
             airline_counter = Counter(p['airline'] for p in planes)
