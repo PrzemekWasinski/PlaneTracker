@@ -3,9 +3,14 @@
 This is my plane tracker I made with a Raspberry Pi 4 and a Radio Antenna, it catches flight data broadcasted from planes and uses this data to populate the radar display,
 the flight data is also uploaded to Firebase for my Kotlin app to use.
 
-# Current setup:
+![planes](https://github.com/user-attachments/assets/8f3b0528-d802-44fc-aa27-f57cd7dce782)
 
-![20251127_111136(1)](https://github.com/user-attachments/assets/98fc99f8-623c-4a89-9fcd-6529e1f90010)
+# GUI
+<img width="691" height="415" alt="menu" src="https://github.com/user-attachments/assets/0b9e0b60-83fb-40f2-8fbe-53f0b625d2b4" />
+
+This is the radar GUI showing planes in their live position, nearby airports and rings showing different distances, the arrow on the right side of the screen opens a menu
+that can be used to zoom in and out, pause and unpause the plane tracker, see logs, see the Raspberry Pi's system performance, time and amount of planes being tracked.
+
 
 # How it works
 
