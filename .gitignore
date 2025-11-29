@@ -1,19 +1,6 @@
-*.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
 .DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
-local.properties
-/app/google-service.json
-/PlaneTrackerMobile/app/google-services.json
-/RPI_ADSBMonitor/flightkey.json
-/RPI_ADSBMonitor/clear_db.py
+/py_cache
+
+# Local configuration with personal coordinates
+config.yml
+stats_history/

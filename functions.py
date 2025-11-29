@@ -13,6 +13,23 @@ import os
 from datetime import datetime
 from time import strftime, localtime
 from collections import Counter
+import yaml
+
+# Load configuration from config.yml
+def load_config():
+    config_path = os.path.join(os.path.dirname(__file__), 'config.yml')
+    try:
+        with open(config_path, 'r') as f:
+            return yaml.safe_load(f)
+    except FileNotFoundError:
+        print(f"Error: config.yml not found. Please copy config.example.yml to config.yml and update with your coordinates.")
+        sys.exit(1)
+    except yaml.YAMLError as e:
+        print(f"Error parsing config.yml: {e}")
+        sys.exit(1)
+
+# Load config at module level
+_config = load_config()
 
 def restart_script(): #Function to restart the script
     print("Restarting script")
@@ -30,11 +47,11 @@ def connect(server): #Connects to ADSB receiver
             time.sleep(3)
 
 def coords_to_xy(lat, lon, range_km): #Converts coordinates to pixel positions for the radar display
-    centre_lat = 0.000000
-    centre_lon = 0.000000
+    centre_lat = _config['home_coordinates']['latitude']
+    centre_lon = _config['home_coordinates']['longitude']
 
-    screen_width = 800
-    screen_height = 480
+    screen_width = _config['display']['screen_width']
+    screen_height = _config['display']['screen_height']
     km_per_px = (range_km * 2) / screen_width
 
     delta_lat = lat - centre_lat

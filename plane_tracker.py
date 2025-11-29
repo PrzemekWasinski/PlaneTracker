@@ -17,10 +17,28 @@ import requests
 import csv
 import tempfile
 import shutil
+import yaml
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functions import restart_script, connect, coords_to_xy, split_message, clean_string, get_stats, calculate_heading
 from draw import draw_text, draw_fading_text, draw_text_centered
 from airport_db import airports_uk
+
+# Load configuration from config.yml
+def load_config():
+    config_path = os.path.join(os.path.dirname(__file__), 'config.yml')
+    try:
+        with open(config_path, 'r') as f:
+            return yaml.safe_load(f)
+    except FileNotFoundError:
+        print(f"Error: config.yml not found. Please copy config.example.yml to config.yml and update with your coordinates.")
+        sys.exit(1)
+    except yaml.YAMLError as e:
+        print(f"Error parsing config.yml: {e}")
+        sys.exit(1)
+
+# Load config at module level
+_config = load_config()
 
 if not firebase_admin._apps: #Initialise Firebase
     cred = credentials.Certificate("./firebase.json")
@@ -35,8 +53,9 @@ pygame.mouse.set_visible(False)
 run = False #Initialize as False until we check Firebase
 map = False
 
-width = 800 #Display dimensions
-height = 480
+# Get display dimensions from config
+width = _config['display']['screen_width']
+height = _config['display']['screen_height']
 window = pygame.display.set_mode((width, height), pygame.FULLSCREEN)
 
 text_font1 = pygame.font.Font(os.path.join("textures", "NaturalMono-Bold.ttf"), 16) #Fonts

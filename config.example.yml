@@ -1,0 +1,9 @@
+#Coordinates of the plane tracker for radar GUI
+home_coordinates:
+  latitude: 0.000000  # Your latitude
+  longitude: 0.000000  # Your longitude
+
+#Display settings
+display:
+  screen_width: 800
+  screen_height: 480
