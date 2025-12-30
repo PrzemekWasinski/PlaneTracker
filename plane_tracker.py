@@ -19,6 +19,7 @@ import tempfile
 import shutil
 import yaml
 import sys
+import ctypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functions import restart_script, connect, coords_to_xy, split_message, clean_string, get_stats, calculate_heading
 from draw_text import draw_text, draw_fading_text, draw_text_centered
@@ -45,6 +46,8 @@ if not firebase_admin._apps: #Initialise Firebase
     firebase_admin.initialize_app(cred, {
         "databaseURL": "https://rpi-flight-tracker-default-rtdb.europe-west1.firebasedatabase.app"
     })
+
+cpp_file = ctypes.CDLL(os.path.abspath("cpp_functions.so"))
 
 offline = _config['mode']['offline']
 
@@ -814,9 +817,14 @@ def main():
                 try:
                     x, y = coords_to_xy(float(lat), float(lon), range)
 
-                    # If we have previous coordinates, draw rotated plane, otherwise a dot
+                    # If we have previous coordinates, draw rotated plane, otherwise dont
                     if prev_lat is not None and prev_lon is not None:
-                        heading = calculate_heading(prev_lat, prev_lon, lat, lon)
+                        #heading = calculate_heading(prev_lat, prev_lon, lat, lon)
+                        cpp_file.calculateHeading.restype = ctypes.c_double
+                        cpp_file.calculateHeading.argtypes = [ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double]
+
+                        heading = float(cpp_file.calculateHeading(prev_lat, prev_lon, lat, lon))
+                        message_queue.put(heading)
                         
                         colored_icon = plane_icon.copy()
                         colored_icon.fill(rgb_value, special_flags=pygame.BLEND_RGB_MULT)
@@ -825,28 +833,25 @@ def main():
                         rotated_image = pygame.transform.rotate(colored_icon, heading)
                         new_rect = rotated_image.get_rect(center=(x, y))
                         window.blit(rotated_image, new_rect)
-                    else:
-                        dot_icon_copy = dot_icon.copy()
-                        dot_icon_copy.set_alpha(fade_value)
-                        new_rect = dot_icon_copy.get_rect(center=(x, y))
-                        window.blit(dot_icon_copy, new_rect)
                     
-                    # Only draw text labels if NOT in offline mode
-                    if not offline:
-                        manufacturer = plane.get('manufacturer', '-')
-                        model = plane.get('model', '-')
-                        owner = plane.get("owner", "-")
-                        
-                        plane_string = f"{manufacturer or '-'} {model or '-'}"
-                        owner_text = owner or "Unknown"
-                        
-                        draw_fading_text(window, owner_text, text_font3, (255, 202, 0), x, y - 13, fade_value)
-                        draw_fading_text(window, plane_string, text_font3, (255, 202, 0), x, y + 13, fade_value)
-                    else:
-                        plane_icao = plane.get("icao", "unknown")
-                        draw_fading_text(window, icao, text_font3, (255, 202, 0), x, y - 13, fade_value)
-                    
-                    # In offline mode, just draw the plane icon without labels
+                        #If in normal mode - show model and airline
+                        if not offline:
+                            manufacturer = plane.get('manufacturer', '-')
+                            model = plane.get('model', '-')
+                            owner = plane.get("owner", "-")
+                            
+                            plane_string = f"{manufacturer or '-'} {model or '-'}"
+                            owner_text = owner or "Unknown"
+                            
+                            draw_fading_text(window, owner_text, text_font3, (255, 202, 0), x, y - 13, fade_value)
+                            draw_fading_text(window, plane_string, text_font3, (255, 202, 0), x, y + 13, fade_value)
+                        #If offline only show ICAO and altitude as we dont have model and airline info which we get from calling the API
+                        else:
+                            plane_icao = plane.get("icao", "unknown")
+                            plane_altitude = plane.get("altitude", "-")
+
+                            draw_fading_text(window, icao, text_font3, (255, 202, 0), x, y - 13, fade_value)
+                            draw_fading_text(window, f"{plane_altitude}ft", text_font3, (255, 202, 0), x, y + 13, fade_value)
                         
                 except Exception as error:
                     print(f"Drawing error for {icao}: {error}")
