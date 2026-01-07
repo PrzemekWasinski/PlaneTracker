@@ -1,6 +1,6 @@
 .DS_Store
 /py_cache
-
-# Local configuration with personal coordinates
+.vscode
+/build
 config.yml
 stats_history/

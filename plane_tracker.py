@@ -80,6 +80,7 @@ display_duration = 30
 fade_duration = 10    
 
 tracker_running_event = threading.Event()
+tracker_running_event.set()
 
 device_stats_cache = { #Cache
     "cpu_temp": 0,
@@ -114,7 +115,7 @@ def check_run_status():
     except Exception as error:
         print(f"Firebase error checking run status: {error}")
     
-    return run
+    return True
 
 def fetch_plane_api_data(icao):
     try:
@@ -147,24 +148,44 @@ def fetch_plane_api_data(icao):
     except Exception as e:
         print(f"API error for {icao}: {e}")
 
-    return {"icao": icao, "success": False}
+    return {"icao": icao, "success": False} 
 
-def firebase_watcher(): #Keep checking Firebase if run is true
-    global run
-    while True:
-        prev_run_state = run
-        current_run_state = check_run_status()
+def enrich_all_active_planes():
+    global active_planes, displayed_planes
+    
+    # Snapshot of keys to avoid runtime error during iteration
+    icaos_to_update = [
+        icao for icao, data in list(active_planes.items())
+        if data.get("manufacturer", "-") == "-"
+    ]
+    
+    if not icaos_to_update:
+        return
 
-        if prev_run_state != current_run_state:
-            if current_run_state:
-                message_queue.put("Tracker activated - Starting data collection")
-            else:
-                message_queue.put("Tracker paused via Firebase")
+    message_queue.put(f"Enriching {len(icaos_to_update)} planes...")
 
-        time.sleep(5) #Check every 5 seconds 
-
-# Replace the entire collect_and_process_data() function with this version
-# that supports continuous listening in offline mode
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_icao = {
+            executor.submit(fetch_plane_api_data, icao): icao 
+            for icao in icaos_to_update
+        }
+        
+        for future in as_completed(future_to_icao):
+            try:
+                result = future.result()
+                if result["success"]:
+                    icao = result["icao"]
+                    
+                    update_data = {k: result[k] for k in ["manufacturer", "registration", "icao_type_code", "code_mode_s", "operator_flag", "owner", "model"]}
+                    
+                    if icao in active_planes:
+                        active_planes[icao].update(update_data)
+                    
+                    if icao in displayed_planes:
+                        displayed_planes[icao]["plane_data"].update(update_data)
+                        
+            except Exception as e:
+                print(f"Enrichment error: {e}")
 
 def collect_and_process_data():
     global active_planes, displayed_planes, is_receiving, is_processing, cpu_temp, ram_percentage
@@ -176,9 +197,6 @@ def collect_and_process_data():
     
     # CSV batching
     csv_batch = []
-    CSV_BATCH_SIZE = 20 if offline else 10
-    last_csv_write = time.time()
-    CSV_WRITE_INTERVAL = 5  # Write CSV every 5 seconds
     
     while True:
         tracker_running_event.wait()
@@ -192,8 +210,9 @@ def collect_and_process_data():
             buffer = ""
             
             try:
-                while tracker_running_event.is_set():
+                while tracker_running_event.is_set() and offline:
                     is_receiving = True
+                    current_time = time.time()
                     
                     try:
                         data = sock.recv(1024)
@@ -246,17 +265,6 @@ def collect_and_process_data():
                                 }
                                 
                                 active_planes[icao] = plane_data
-                                csv_batch.append((icao, plane_data))
-                        
-                        # Batch CSV writes
-                        current_time = time.time()
-                        if len(csv_batch) >= CSV_BATCH_SIZE or (csv_batch and current_time - last_csv_write > CSV_WRITE_INTERVAL):
-                            is_processing = True
-                            write_csv_batch(csv_batch)
-                            message_queue.put(f"Logged {len(csv_batch)} planes to CSV")
-                            csv_batch = []
-                            last_csv_write = current_time
-                            is_processing = False
                         
                         # Clean up expired planes periodically
                         if len(displayed_planes) > 0 and current_time % 5 < 0.5:  # Every ~5 seconds
@@ -274,9 +282,8 @@ def collect_and_process_data():
             finally:
                 sock.close()
                 is_receiving = False
-                # Write any remaining CSV data
+                #Remove any remaining CSV data
                 if csv_batch:
-                    write_csv_batch(csv_batch)
                     csv_batch = []
                 
         else:
@@ -571,9 +578,6 @@ def write_csv_batch(csv_updates):
         print(f"CSV save error: {e}")
 
 def start_data_cycle():
-    if not offline:
-        watcher_thread = threading.Thread(target=firebase_watcher, daemon=True) #Start the Firebase watching thread
-        watcher_thread.start()
     
     data_thread = threading.Thread(target=collect_and_process_data, daemon=True) #Start the data collection thread
     data_thread.start()
@@ -596,8 +600,8 @@ image1 = pygame.image.load(os.path.join("textures", "icons", "open_menu.png"))
 image2 = pygame.image.load(os.path.join("textures", "icons", "close_menu.png"))
 image3 = pygame.image.load(os.path.join("textures", "icons", "zoom_in.png"))
 image4 = pygame.image.load(os.path.join("textures", "icons", "zoom_out.png"))
-image5 = pygame.image.load(os.path.join("textures", "icons", "pause.png"))
-image6 = pygame.image.load(os.path.join("textures", "icons", "resume.png"))
+image5 = pygame.image.load(os.path.join("textures", "icons", "online.png"))
+image6 = pygame.image.load(os.path.join("textures", "icons", "offline.png"))
 image7 = pygame.image.load(os.path.join("textures", "icons", "off.png"))
 plane_icon = pygame.image.load(os.path.join("textures", "icons", "plane.png")).convert_alpha()
 dot_icon = pygame.image.load(os.path.join("textures", "icons", "dot.png")).convert_alpha()
@@ -617,8 +621,8 @@ open_menu_image = image1.get_rect(center=(765, 240))
 close_menu_image = image2.get_rect(center=(550, 240))
 zoom_in_image = image3.get_rect(topleft=(585, 415))
 zoom_out_image = image4.get_rect(topleft=(635, 415))
-pause_image = image5.get_rect(topleft=(685, 415))
-resume_image = image6.get_rect(topleft=(685, 415))
+online_image = image5.get_rect(topleft=(685, 415))
+offline_image = image6.get_rect(topleft=(685, 415))
 off_image = image7.get_rect(topleft=(735, 415))
 
 map_25km = image8.get_rect(topleft=(0, 0))
@@ -636,6 +640,7 @@ def main():
     global cpu_temp
     global ram_percentage
     global run
+    global offline
 
     start_time = time.time()
     update_time = time.time()
@@ -688,25 +693,14 @@ def main():
                     elif mouse_x > 635 and mouse_y > 415 and mouse_x < 675 and mouse_y < 455 and range < 250: #Increase range button
                         range += 25
                     elif mouse_x > 685 and mouse_y > 415 and mouse_x < 725 and mouse_y < 455: #Pause/resume button
-                        run = not run 
-                        if run:
-                            tracker_running_event.set()
-                            message_queue.put("Tracker activated via UI")
-                        else:
-                            tracker_running_event.clear()
-                            message_queue.put("Tracker paused via UI")
-                            
+                        offline = not offline
                         if not offline:
-                            ref = db.reference("device_stats")
-                            ref.update({"run": run})
+                            threading.Thread(target=enrich_all_active_planes, daemon=True).start()
+                        
                         
                     elif mouse_x > 735 and mouse_y > 415 and mouse_x < 775 and mouse_y < 455:  #Quit button
                         run = False 
                         tracker_running_event.clear()
-
-                        if not offline:
-                            ref = db.reference("device_stats")
-                            ref.update({"run": run})
 
                         pygame.quit()
                         exit()
@@ -819,12 +813,8 @@ def main():
 
                     # If we have previous coordinates, draw rotated plane, otherwise dont
                     if prev_lat is not None and prev_lon is not None:
-                        #heading = calculate_heading(prev_lat, prev_lon, lat, lon)
-                        cpp_file.calculateHeading.restype = ctypes.c_double
-                        cpp_file.calculateHeading.argtypes = [ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double]
-
-                        heading = float(cpp_file.calculateHeading(prev_lat, prev_lon, lat, lon))
-                        message_queue.put(heading)
+                        
+                        heading = calculate_heading(prev_lat, prev_lon, lat, lon)
                         
                         colored_icon = plane_icon.copy()
                         colored_icon.fill(rgb_value, special_flags=pygame.BLEND_RGB_MULT)
@@ -895,10 +885,10 @@ def main():
                 window.blit(image4, (zoom_out_image))
                 window.blit(image7, (off_image))
 
-                if run:
-                    window.blit(image5, (pause_image))
+                if not offline:
+                    window.blit(image5, (online_image))
                 else:
-                    window.blit(image6, (resume_image))
+                    window.blit(image6, (offline_image))
                 
             else:
                 window.blit(image1, (open_menu_image))
