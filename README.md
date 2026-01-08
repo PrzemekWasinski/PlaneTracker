@@ -22,7 +22,7 @@ position data. Using Python the plane is then displayed on the radar screen by c
 Currently the max range I've gotten is about 150 Km meaning with a slightly bigger antenna mounted higher I would be able to track planes flying in France and Belgium.
 
 # Tech Stack
-    Language: Python
+    Language: Python & C++
     Radar GUI: Pygame
     Database: Firebase
     Hardware: Raspberry Pi 4b, NESDR Mini USB ADS-B receiver + Antenna
