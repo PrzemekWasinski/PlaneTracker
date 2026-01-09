@@ -13,41 +13,37 @@ import os
 import threading
 import requests
 import csv
-import yaml
+import subprocess
 import sys
-from functions import restart_script, connect, coords_to_xy, split_message, clean_string, get_stats, calculate_heading
-from draw_text import draw_text, draw_fading_text, draw_text_centered
-from airport_db import airports_uk
 
-#Load config file
-def load_config():
-    config_path = os.path.join(os.path.dirname(__file__), 'config.yml')
-    try:
-        with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
-    except FileNotFoundError:
-        print(f"Error: config.yml not found")
-        sys.exit(1)
-    except yaml.YAMLError as e:
-        print(f"Error parsing config.yml: {e}")
-        sys.exit(1)
-
-def save_config(config):
-    config_path = os.path.join(os.path.dirname(__file__), 'config.yml')
-    try:
-        with open(config_path, 'w') as f:
-            yaml.dump(config, f, default_flow_style=False)
-        return True
-    except Exception as e:
-        print(f"Error saving config.yml: {e}")
-        return False
+from modules import draw_text, functions, airport_db
 
 #Load config
-_config = load_config()
+_config = functions.load_config()
+
+# Start C++ process
+cpp_proc = subprocess.Popen(
+    ["./test/test"],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    bufsize=1
+)
+
+def send_plane(icao, lat, lon, alt):
+    try:
+        line = f"{icao},{lat},{lon},{alt}\n"
+        cpp_proc.stdin.write(line)
+        cpp_proc.stdin.flush()
+    except BrokenPipeError:
+        print("C++ process died: exiting")
+        sys.exit(1)
+
 
 #Initialize Firebase
 if not firebase_admin._apps:
-    cred = credentials.Certificate("./firebase.json")
+    cred = credentials.Certificate("./config/firebase.json")
     firebase_admin.initialize_app(cred, {
         "databaseURL": "https://rpi-flight-tracker-default-rtdb.europe-west1.firebasedatabase.app"
     })
@@ -77,9 +73,9 @@ height = _config['display']['screen_height']
 window = pygame.display.set_mode((width, height), pygame.FULLSCREEN)
 
 #Fonts
-text_font1 = pygame.font.Font(os.path.join("textures", "NaturalMono-Bold.ttf"), 16)
-text_font2 = pygame.font.Font(os.path.join("textures", "DS-DIGI.TTF"), 40)
-text_font3 = pygame.font.Font(os.path.join("textures", "NaturalMono-Bold.ttf"), 9)
+text_font1 = pygame.font.Font(os.path.join("textures", "fonts", "NaturalMono-Bold.ttf"), 16)
+text_font2 = pygame.font.Font(os.path.join("textures", "fonts", "DS-DIGI.TTF"), 40)
+text_font3 = pygame.font.Font(os.path.join("textures", "fonts", "NaturalMono-Bold.ttf"), 9)
 
 #Load images
 image1 = pygame.image.load(os.path.join("textures", "icons", "open_menu.png"))
@@ -127,7 +123,7 @@ def fetch_plane_info(icao):
         if response.status_code == 200:
             api_data = response.json()
             
-            manufacturer = clean_string(str(api_data.get("Manufacturer", "-")))
+            manufacturer = functions.clean_string(str(api_data.get("Manufacturer", "-")))
             if manufacturer == "Avions de Transport Regional":
                 manufacturer = "ATR"
             elif manufacturer == "Honda Aircraft Company":
@@ -135,9 +131,9 @@ def fetch_plane_info(icao):
             
             return {
                 "manufacturer": manufacturer,
-                "registration": clean_string(str(api_data.get("Registration", "-"))),
-                "owner": clean_string(str(api_data.get("RegisteredOwners", "-"))),
-                "model": clean_string(str(api_data.get("Type", "-")))
+                "registration": functions.clean_string(str(api_data.get("Registration", "-"))),
+                "owner": functions.clean_string(str(api_data.get("RegisteredOwners", "-"))),
+                "model": functions.clean_string(str(api_data.get("Type", "-")))
             }
         else: 
             url = f"https://opensky-network.org/api/metadata/aircraft/icao/{icao}" #Backup API that kind of sucks :/
@@ -299,7 +295,7 @@ def adsb_processing_thread():
             if current_time - last_api_retry > 60:
                 last_api_retry = current_time
             
-            sock = connect(SERVER_SBS)
+            sock = functions.connect(SERVER_SBS)
             sock.settimeout(0.5)
             buffer = ""
             
@@ -312,7 +308,7 @@ def adsb_processing_thread():
                         print("Reconnecting...")
                         sock.close()
                         time.sleep(1)
-                        sock = connect(SERVER_SBS)
+                        sock = functions.connect(SERVER_SBS)
                         continue
                     
                     buffer += data.decode(errors="ignore")
@@ -321,7 +317,7 @@ def adsb_processing_thread():
                     
                     #Process each message
                     for line in lines[:-1]:
-                        plane_data = split_message(line)
+                        plane_data = functions.split_message(line)
                         
                         if plane_data and plane_data["lon"] != "-" and plane_data["lat"] != "-":
                             icao = plane_data['icao']
@@ -331,6 +327,8 @@ def adsb_processing_thread():
                             plane_data["registration"] = "-"
                             plane_data["owner"] = "-"
                             plane_data["model"] = "-"
+
+                            send_plane(icao, plane_data["lat"], plane_data["lon"], plane_data["altitude"])
                             
                             #Track position
                             with data_lock:
@@ -372,10 +370,8 @@ def adsb_processing_thread():
             
         else:
             #Online mode:
-            add_message("Receiving ADSB messages..")
-            
             #Listen to messages for 1 second from the radio antenna
-            sock = connect(SERVER_SBS)
+            sock = functions.connect(SERVER_SBS)
             sock.settimeout(0.1)
             buffer = ""
             collected_planes = {}
@@ -391,7 +387,7 @@ def adsb_processing_thread():
                         buffer = lines[-1]
                         
                         for line in lines[:-1]:
-                            plane_data = split_message(line)
+                            plane_data = functions.split_message(line)
                             if plane_data and plane_data["lon"] != "-" and plane_data["lat"] != "-":
                                 collected_planes[plane_data['icao']] = plane_data
                                 
@@ -421,6 +417,8 @@ def adsb_processing_thread():
                         break
                     
                     plane_data = collected_planes[icao]
+
+                    send_plane(icao, plane_data["lat"], plane_data["lon"], plane_data["altitude"])
                     
                     #Check if we need API data
                     need_api = True
@@ -545,13 +543,13 @@ def main():
         #Restart every 30 minutes
         if current_time - start_time > 1800:
             print("Restarting...")
-            restart_script()
+            functions.restart_script()
         
         #Upload stats every minute to Firebase
         if current_time - update_time > 60 and not offline:
             today = datetime.today().strftime("%Y-%m-%d")
             ref = db.reference(f"{today}/stats")
-            ref.set(get_stats())
+            ref.set(functions.get_stats())
             update_time = time.time()
         
         #Get CPU and RAM stats
@@ -596,7 +594,7 @@ def main():
 
                         #Save new offline state to config file
                         _config['mode']['offline'] = offline
-                        save_config(_config)
+                        functions.save_config(_config)
                 
                         if offline:
                             add_message("Switched to offline mode")
@@ -625,21 +623,21 @@ def main():
             pygame.draw.circle(window, (225, 225, 225), (400, 240), 400, 1)
             
             #Draw range labels
-            draw_text(window, str(round(range_km * 0.25)), text_font3, (225, 225, 225), 305, 235)
-            draw_text(window, str(round(range_km * 0.5)), text_font3, (225, 225, 225), 205, 235)
-            draw_text(window, str(round(range_km * 0.75)), text_font3, (225, 225, 225), 105, 235)
-            draw_text(window, str(round(range_km)), text_font3, (225, 225, 225), 5, 235)
+            draw_text.normal(window, str(round(range_km * 0.25)), text_font3, (225, 225, 225), 305, 235)
+            draw_text.normal(window, str(round(range_km * 0.5)), text_font3, (225, 225, 225), 205, 235)
+            draw_text.normal(window, str(round(range_km * 0.75)), text_font3, (225, 225, 225), 105, 235)
+            draw_text.normal(window, str(round(range_km)), text_font3, (225, 225, 225), 5, 235)
             
             #Draw center point
             if not map_enabled:
                 pygame.draw.polygon(window, (0, 255, 255), [(400, 238), (402, 240), (400, 242), (398, 240)])
             
             #Draw airports
-            for key in airports_uk:
-                airport = airports_uk[key]
-                x, y = coords_to_xy(airport["lat"], airport["lon"], range_km)
+            for key in airport_db.airports_uk:
+                airport = airport_db.airports_uk[key]
+                x, y = functions.coords_to_xy(airport["lat"], airport["lon"], range_km, _config['home_coordinates']['latitude'], _config['home_coordinates']['longitude'], width, height)
                 pygame.draw.polygon(window, (0, 0, 255), [(x, y - 2), (x + 2, y), (x, y + 2), (x - 2, y)])
-                draw_text_centered(window, airport["airport_name"], text_font3, (255, 255, 255), x, y - 10)
+                draw_text.center(window, airport["airport_name"], text_font3, (255, 255, 255), x, y - 10)
             
             #Draw planes
             displayed_count = 0
@@ -681,13 +679,13 @@ def main():
                     
                     #Draw plane
                     try:
-                        x, y = coords_to_xy(float(lat), float(lon), range_km)
+                        x, y = functions.coords_to_xy(float(lat), float(lon), range_km, _config['home_coordinates']['latitude'], _config['home_coordinates']['longitude'], width, height)
                         
                         prev_lat = plane.get("prev_lat")
                         prev_lon = plane.get("prev_lon")
                         
                         if prev_lat is not None and prev_lon is not None:
-                            heading = calculate_heading(prev_lat, prev_lon, lat, lon)
+                            heading = functions.calculate_heading(prev_lat, prev_lon, lat, lon)
                             
                             colored_icon = plane_icon.copy()
                             colored_icon.fill((255, 202, 0), special_flags=pygame.BLEND_RGB_MULT)
@@ -705,13 +703,13 @@ def main():
                                 
                                 plane_string = f"{manufacturer} {model}"
                                 
-                                draw_fading_text(window, owner, text_font3, (255, 202, 0), x, y - 13, fade_value)
-                                draw_fading_text(window, plane_string, text_font3, (255, 202, 0), x, y + 13, fade_value)
+                                draw_text.fading(window, owner, text_font3, (255, 202, 0), x, y - 13, fade_value)
+                                draw_text.fading(window, plane_string, text_font3, (255, 202, 0), x, y + 13, fade_value)
                             else:
                                 #Show ICAO and altitude only (offline data)
                                 altitude = plane.get("altitude", "-")
-                                draw_fading_text(window, icao, text_font3, (255, 202, 0), x, y - 13, fade_value)
-                                draw_fading_text(window, f"{altitude}ft", text_font3, (255, 202, 0), x, y + 13, fade_value)
+                                draw_text.fading(window, icao, text_font3, (255, 202, 0), x, y - 13, fade_value)
+                                draw_text.fading(window, f"{altitude}ft", text_font3, (255, 202, 0), x, y + 13, fade_value)
                                 
                     except Exception as e:
                         print(f"Draw error for {icao}: {e}")
@@ -722,8 +720,8 @@ def main():
                 
                 pygame.draw.rect(window, (0, 0, 0), (570, 10, 220, 460), 0, 5)
                 
-                draw_text_centered(window, current_time_str, text_font2, (255, 0, 0), 675, 40)
-                draw_text_centered(window, f"CPU:{round(cpu_temp)}°C  RAM:{ram_percentage}%", text_font1, (255, 255, 255), 675, 75)
+                draw_text.center(window, current_time_str, text_font2, (255, 0, 0), 675, 40)
+                draw_text.center(window, f"CPU:{round(cpu_temp)}°C  RAM:{ram_percentage}%", text_font1, (255, 255, 255), 675, 75)
                 
                 #Status
                 if is_receiving:
@@ -741,8 +739,8 @@ def main():
                 else:
                     display_rgb = (0, 255, 0)
                 
-                draw_text_centered(window, f"Status: {status}", text_font1, (255, 255, 255), 675, 100)
-                draw_text_centered(window, f"Active: {displayed_count}", text_font1, display_rgb, 675, 135)
+                draw_text.center(window, f"Status: {status}", text_font1, (255, 255, 255), 675, 100)
+                draw_text.center(window, f"Active: {displayed_count}", text_font1, display_rgb, 675, 135)
                 
                 #Message log
                 pygame.draw.rect(window, (255, 255, 255), (580, 155, 200, 240), 2)
@@ -751,11 +749,11 @@ def main():
                 with data_lock:
                     for message in message_queue[-23:]:
                         if "WARNING" in message:
-                            draw_text(window, str(message), text_font3, (255, 0, 0), 585, y)
+                            draw_text.normal(window, str(message), text_font3, (255, 0, 0), 585, y)
                         elif "NEW" in message:
-                            draw_text(window, str(message), text_font3, (0, 255, 0), 585, y)
+                            draw_text.normal(window, str(message), text_font3, (0, 255, 0), 585, y)
                         else:
-                            draw_text(window, str(message), text_font3, (255, 255, 255), 585, y)
+                            draw_text.normal(window, str(message), text_font3, (255, 255, 255), 585, y)
                             
                         y += 10
                 
