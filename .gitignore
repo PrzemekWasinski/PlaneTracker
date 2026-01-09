@@ -1,6 +1,11 @@
 .DS_Store
+
+__pycache__
 /py_cache
 .vscode
 /build
+
 config.yml
 stats_history/
+textures
+

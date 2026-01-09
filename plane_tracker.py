@@ -60,7 +60,7 @@ is_receiving = False
 is_processing = False
 api_available = True
 network_available = True
-status_messages = []
+message_queue = []
 tracker_running = True
 display_duration = 30
 fade_duration = 10
@@ -106,11 +106,11 @@ for km in [25, 50, 75, 100, 125, 150, 175, 200, 225, 250]:
     map_images[km] = pygame.image.load(os.path.join("textures", "images", f"{km}.png"))
 
 #Helper functions
-def add_status_message(message):
+def add_message(message):
     with data_lock:
-        status_messages.append(message)
-        if len(status_messages) > 24:
-            status_messages.pop(0)
+        message_queue.append(message)
+        if len(message_queue) > 24:
+            message_queue.pop(0)
 
 def check_network():
     try:
@@ -291,13 +291,12 @@ def adsb_processing_thread():
         if current_time - last_network_check > 30:
             network_available = check_network()
             if not network_available and not offline:
-                add_status_message("WARNING: No network connection")
+                add_message("WARNING: No network connection")
             last_network_check = current_time
         
         if offline:
             #Offline mode
             if current_time - last_api_retry > 60:
-                add_status_message("Offline mode - ICAO and altitude only")
                 last_api_retry = current_time
             
             sock = connect(SERVER_SBS)
@@ -373,7 +372,7 @@ def adsb_processing_thread():
             
         else:
             #Online mode:
-            add_status_message("Collecting data (1 second)")
+            add_message("Receiving ADSB messages..")
             
             #Listen to messages for 1 second from the radio antenna
             sock = connect(SERVER_SBS)
@@ -411,7 +410,7 @@ def adsb_processing_thread():
             #Process collected planes
             if len(collected_planes) > 0:
                 is_processing = True
-                add_status_message(f"Processing {len(collected_planes)} planes")
+                add_message(f"Processing {len(collected_planes)} messages")
                 
                 api_failures = 0
                 planes_with_data = 0
@@ -446,7 +445,7 @@ def adsb_processing_thread():
                                 plane_data["registration"] = api_data["registration"]
                                 plane_data["owner"] = api_data["owner"]
                                 plane_data["model"] = api_data["model"]
-                                add_status_message(f"New: {api_data['manufacturer']} {api_data['model']}")
+                                add_message(f"NEW: {api_data['manufacturer']} {api_data['model']}")
                                 planes_with_data += 1
                                 api_available = True
                             else:
@@ -488,13 +487,11 @@ def adsb_processing_thread():
                 
                 #API error warnings
                 if api_failures > 0:
-                    add_status_message(f"WARNING: API failed for {api_failures} planes")
-                    add_status_message("Showing ICAO and altitude only")
-                    add_status_message("Will retry API on next cycle")
+                    add_message(f"WARNING: {api_failures} API requests failed")
                     api_available = False
                 
                 if planes_with_data > 0:
-                    add_status_message(f"Saved {planes_with_data} planes with complete data")
+                    add_message(f"SAVED: {planes_with_data} planes")
                 
                 #Clean old planes
                 current_time = time.time()
@@ -507,7 +504,7 @@ def adsb_processing_thread():
                         del displayed_planes[icao]
                 
                 is_processing = False
-                add_status_message("Processing complete")
+                add_message("Procesing complete")
                 
             #Upload device stats periodically to Firebase
             if time.time() - last_stats_upload > 30:
@@ -594,11 +591,17 @@ def main():
                     
                     #Toggle offline/online 
                     elif mouse_x > 685 and mouse_y > 415 and mouse_x < 725 and mouse_y < 455:
+                        #Flip offline mode
                         offline = not offline
+
+                        #Save new offline state to config file
+                        _config['mode']['offline'] = offline
+                        save_config(_config)
+                
                         if offline:
-                            add_status_message("Switched to OFFLINE mode")
+                            add_message("Switched to offline mode")
                         else:
-                            add_status_message("Switched to ONLINE mode")
+                            add_message("Switched to online mode")
                     
                     #Quit button
                     elif mouse_x > 735 and mouse_y > 415 and mouse_x < 775 and mouse_y < 455:
@@ -676,19 +679,6 @@ def main():
                         if fade_value < 10:
                             fade_value = 10
                     
-                    #Set color
-                    if has_complete_data and not offline:
-                        owner = plane.get("owner", "-")
-                        model = plane.get('model', '-')
-                        if "Air Force" in owner or "Navy" in owner:
-                            rgb_value = (255, 0, 0)
-                        elif "747" in model or "340" in model:
-                            rgb_value = (255, 0, 255)
-                        else:
-                            rgb_value = (255, 255, 255)
-                    else:
-                        rgb_value = (255, 255, 255)
-                    
                     #Draw plane
                     try:
                         x, y = coords_to_xy(float(lat), float(lon), range_km)
@@ -700,7 +690,7 @@ def main():
                             heading = calculate_heading(prev_lat, prev_lon, lat, lon)
                             
                             colored_icon = plane_icon.copy()
-                            colored_icon.fill(rgb_value, special_flags=pygame.BLEND_RGB_MULT)
+                            colored_icon.fill((255, 202, 0), special_flags=pygame.BLEND_RGB_MULT)
                             colored_icon.set_alpha(fade_value)
                             
                             rotated_image = pygame.transform.rotate(colored_icon, heading)
@@ -759,8 +749,14 @@ def main():
                 
                 y = 159
                 with data_lock:
-                    for message in status_messages[-23:]:
-                        draw_text(window, str(message), text_font3, (255, 255, 255), 585, y)
+                    for message in message_queue[-23:]:
+                        if "WARNING" in message:
+                            draw_text(window, str(message), text_font3, (255, 0, 0), 585, y)
+                        elif "NEW" in message:
+                            draw_text(window, str(message), text_font3, (0, 255, 0), 585, y)
+                        else:
+                            draw_text(window, str(message), text_font3, (255, 255, 255), 585, y)
+                            
                         y += 10
                 
                 #Buttons
