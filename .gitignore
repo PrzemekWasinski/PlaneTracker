@@ -9,3 +9,4 @@ config.yml
 stats_history/
 textures
 
+/config/config.yaml

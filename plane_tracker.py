@@ -21,15 +21,15 @@ from modules import draw_text, functions, airport_db
 #Load config
 _config = functions.load_config()
 
-# Start C++ process
-cpp_proc = subprocess.Popen(
-    ["./test/test"],
-    stdin=subprocess.PIPE,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    text=True,
-    bufsize=1
-)
+# #Start C++ process
+# cpp_proc = subprocess.Popen(
+#     ["./camera_module/communication_test/test"],
+#     stdin=subprocess.PIPE,
+#     stdout=subprocess.PIPE,
+#     stderr=subprocess.PIPE,
+#     text=True,
+#     bufsize=1
+# )
 
 def send_plane(icao, lat, lon, alt):
     try:
