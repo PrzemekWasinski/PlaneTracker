@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import socket
 import time
 from datetime import datetime
@@ -31,14 +29,14 @@ _config = functions.load_config()
 #     bufsize=1
 # )
 
-def send_plane(icao, lat, lon, alt):
-    try:
-        line = f"{icao},{lat},{lon},{alt}\n"
-        cpp_proc.stdin.write(line)
-        cpp_proc.stdin.flush()
-    except BrokenPipeError:
-        print("C++ process died: exiting")
-        sys.exit(1)
+# def send_plane(icao, lat, lon, alt):
+#     try:
+#         line = f"{icao},{lat},{lon},{alt}\n"
+#         cpp_proc.stdin.write(line)
+#         cpp_proc.stdin.flush()
+#     except BrokenPipeError:
+#         print("C++ process died: exiting")
+#         sys.exit(1)
 
 
 #Initialize Firebase
@@ -49,7 +47,7 @@ if not firebase_admin._apps:
     })
 
 #Global variables
-offline = _config['mode']['offline']
+offline = _config['offlineMode']
 active_planes = {}
 displayed_planes = {}
 is_receiving = False
@@ -64,12 +62,12 @@ fade_duration = 10
 #Thread lock for shared data
 data_lock = threading.Lock()
 
-#Initialize Pygame
+#PYGAME SETUP
 pygame.init()
-pygame.mouse.set_visible(False)
+#pygame.mouse.set_visible(False)
 
-width = _config['display']['screen_width']
-height = _config['display']['screen_height']
+width = _config['screenWidth']
+height = _config['screenHeight']
 window = pygame.display.set_mode((width, height), pygame.FULLSCREEN)
 
 #Fonts
@@ -87,14 +85,14 @@ image6 = pygame.image.load(os.path.join("textures", "icons", "offline.png"))
 image7 = pygame.image.load(os.path.join("textures", "icons", "off.png"))
 plane_icon = pygame.image.load(os.path.join("textures", "icons", "plane.png")).convert_alpha()
 
+#Radar display settings
+RADAR_RECT = pygame.Rect(3, 1, 1024, 1024)
+RADAR_CENTER_X = RADAR_RECT.centerx
+RADAR_CENTER_Y = RADAR_RECT.centery
+RADAR_RADIUS = 512
+
 #Set image coordinates and drawing styles
-open_menu_image = image1.get_rect(center=(765, 240))
-close_menu_image = image2.get_rect(center=(550, 240))
-zoom_in_image = image3.get_rect(topleft=(585, 415))
-zoom_out_image = image4.get_rect(topleft=(635, 415))
-online_image = image5.get_rect(topleft=(685, 415))
-offline_image = image6.get_rect(topleft=(685, 415))
-off_image = image7.get_rect(topleft=(735, 415))
+off_button_rect = pygame.Rect(width - 50, height - 50, 50, 50)
 
 #Map images
 map_images = {}
@@ -328,7 +326,7 @@ def adsb_processing_thread():
                             plane_data["owner"] = "-"
                             plane_data["model"] = "-"
 
-                            send_plane(icao, plane_data["lat"], plane_data["lon"], plane_data["altitude"])
+                            # send_plane(icao, plane_data["lat"], plane_data["lon"], plane_data["altitude"])
                             
                             #Track position
                             with data_lock:
@@ -418,7 +416,7 @@ def adsb_processing_thread():
                     
                     plane_data = collected_planes[icao]
 
-                    send_plane(icao, plane_data["lat"], plane_data["lon"], plane_data["altitude"])
+                    # send_plane(icao, plane_data["lat"], plane_data["lon"], plane_data["altitude"])
                     
                     #Check if we need API data
                     need_api = True
@@ -533,7 +531,6 @@ def main():
     start_time = time.time()
     update_time = time.time()
     last_tap_time = time.time()
-    menu_open = False
     range_km = 50
     map_enabled = False
     
@@ -567,211 +564,130 @@ def main():
                 last_tap_time = time.time()
                 mouse_x, mouse_y = pygame.mouse.get_pos()
                 
-                #Open menu button
-                if mouse_x > 755 and mouse_y > 230 and mouse_x < 795 and mouse_y < 260 and not menu_open:
-                    menu_open = True
-                    
-                #Close menu button
-                elif mouse_x > 540 and mouse_y > 230 and mouse_x < 570 and mouse_y < 260 and menu_open:
-                    menu_open = False
-                    
-                #Menu buttons
-                if menu_open:
-                    #Zoom out
-                    if mouse_x > 585 and mouse_y > 415 and mouse_x < 625 and mouse_y < 455:
-                        if range_km > 25:
-                            range_km -= 25
-                    
-                    #Zoom in
-                    elif mouse_x > 635 and mouse_y > 415 and mouse_x < 675 and mouse_y < 455:
-                        if range_km < 250:
-                            range_km += 25
-                    
-                    #Toggle offline/online 
-                    elif mouse_x > 685 and mouse_y > 415 and mouse_x < 725 and mouse_y < 455:
-                        #Flip offline mode
-                        offline = not offline
-
-                        #Save new offline state to config file
-                        _config['mode']['offline'] = offline
-                        functions.save_config(_config)
-                
-                        if offline:
-                            add_message("Switched to offline mode")
-                        else:
-                            add_message("Switched to online mode")
-                    
-                    #Quit button
-                    elif mouse_x > 735 and mouse_y > 415 and mouse_x < 775 and mouse_y < 455:
-                        tracker_running = False
-                        pygame.quit()
-                        exit()
+                # Off button (red square)
+                if off_button_rect.collidepoint(mouse_x, mouse_y):
+                    tracker_running = False
+                    pygame.quit()
+                    exit()
         
-        #Enable screen saver after 3 minutes
-        if current_time - last_tap_time < 180:
-            #Clear screen
-            pygame.draw.rect(window, (0, 0, 0), (0, 0, width, height))
-            
-            #Draw map if enabled
-            if map_enabled and range_km in map_images:
-                window.blit(map_images[range_km], (0, 0))
-            
-            #Draw radar circles
-            pygame.draw.circle(window, (225, 225, 225), (400, 240), 100, 1)
-            pygame.draw.circle(window, (225, 225, 225), (400, 240), 200, 1)
-            pygame.draw.circle(window, (225, 225, 225), (400, 240), 300, 1)
-            pygame.draw.circle(window, (225, 225, 225), (400, 240), 400, 1)
-            
-            #Draw range labels
-            draw_text.normal(window, str(round(range_km * 0.25)), text_font3, (225, 225, 225), 305, 235)
-            draw_text.normal(window, str(round(range_km * 0.5)), text_font3, (225, 225, 225), 205, 235)
-            draw_text.normal(window, str(round(range_km * 0.75)), text_font3, (225, 225, 225), 105, 235)
-            draw_text.normal(window, str(round(range_km)), text_font3, (225, 225, 225), 5, 235)
-            
-            #Draw center point
-            if not map_enabled:
-                pygame.draw.polygon(window, (0, 255, 255), [(400, 238), (402, 240), (400, 242), (398, 240)])
-            
-            #Draw airports
-            for key in airport_db.airports_uk:
-                airport = airport_db.airports_uk[key]
-                x, y = functions.coords_to_xy(airport["lat"], airport["lon"], range_km, _config['home_coordinates']['latitude'], _config['home_coordinates']['longitude'], width, height)
-                pygame.draw.polygon(window, (0, 0, 255), [(x, y - 2), (x + 2, y), (x, y + 2), (x - 2, y)])
-                draw_text.center(window, airport["airport_name"], text_font3, (255, 255, 255), x, y - 10)
-            
-            #Draw planes
-            displayed_count = 0
-            incomplete_count = 0
-            
-            with data_lock:
-                for icao in list(displayed_planes.keys()):
-                    display_data = displayed_planes[icao]
-                    plane = display_data["plane_data"]
-                    
-                    lat = plane.get("last_lat")
-                    lon = plane.get("last_lon")
-                    
-                    if lat is None or lon is None:
-                        continue
-                    
-                    displayed_count += 1
-                    
-                    #Check if plane has complete data
-                    has_complete_data = True
-                    if not offline:
-                        owner = plane.get("owner", "-")
-                        model = plane.get('model', '-')
-                        manufacturer = plane.get('manufacturer', '-')
-                        if owner == "-" or model == "-" or manufacturer == "-":
-                            has_complete_data = False
-                            incomplete_count += 1
-                    
-                    #Calculate fade
-                    time_remaining = display_data["display_until"] - current_time
-                    if time_remaining <= 0:
-                        continue
-                    
-                    fade_value = 255
-                    if time_remaining < fade_duration:
-                        fade_value = int(255 * (time_remaining / fade_duration))
-                        if fade_value < 10:
-                            fade_value = 10
-                    
-                    #Draw plane
-                    try:
-                        x, y = functions.coords_to_xy(float(lat), float(lon), range_km, _config['home_coordinates']['latitude'], _config['home_coordinates']['longitude'], width, height)
-                        
-                        prev_lat = plane.get("prev_lat")
-                        prev_lon = plane.get("prev_lon")
-                        
-                        if prev_lat is not None and prev_lon is not None:
-                            heading = functions.calculate_heading(prev_lat, prev_lon, lat, lon)
-                            
-                            colored_icon = plane_icon.copy()
-                            colored_icon.fill((255, 202, 0), special_flags=pygame.BLEND_RGB_MULT)
-                            colored_icon.set_alpha(fade_value)
-                            
-                            rotated_image = pygame.transform.rotate(colored_icon, heading)
-                            new_rect = rotated_image.get_rect(center=(x, y))
-                            window.blit(rotated_image, new_rect)
-                            
-                            #Draw labels based on data availability
-                            if has_complete_data and not offline:
-                                manufacturer = plane.get('manufacturer', '-')
-                                model = plane.get('model', '-')
-                                owner = plane.get("owner", "-")
-                                
-                                plane_string = f"{manufacturer} {model}"
-                                
-                                draw_text.fading(window, owner, text_font3, (255, 202, 0), x, y - 13, fade_value)
-                                draw_text.fading(window, plane_string, text_font3, (255, 202, 0), x, y + 13, fade_value)
-                            else:
-                                #Show ICAO and altitude only (offline data)
-                                altitude = plane.get("altitude", "-")
-                                draw_text.fading(window, icao, text_font3, (255, 202, 0), x, y - 13, fade_value)
-                                draw_text.fading(window, f"{altitude}ft", text_font3, (255, 202, 0), x, y + 13, fade_value)
-                                
-                    except Exception as e:
-                        print(f"Draw error for {icao}: {e}")
-            
-            #Draw menu
-            if menu_open:
-                current_time_str = strftime("%H:%M:%S", localtime())
+        #Clear screen
+        pygame.draw.rect(window, (0, 0, 0), (0, 0, width, height))
+        
+        #Draw map if enabled
+        if map_enabled and range_km in map_images:
+            window.blit(map_images[range_km], (0, 0))
+        
+        #Draw radar section with clipping
+        window.set_clip(RADAR_RECT)
+        
+        #Draw radar circles
+        pygame.draw.circle(window, (225, 225, 225), (RADAR_CENTER_X, RADAR_CENTER_Y), 100, 1)
+        pygame.draw.circle(window, (225, 225, 225), (RADAR_CENTER_X, RADAR_CENTER_Y), 200, 1)
+        pygame.draw.circle(window, (225, 225, 225), (RADAR_CENTER_X, RADAR_CENTER_Y), 300, 1)
+        pygame.draw.circle(window, (225, 225, 225), (RADAR_CENTER_X, RADAR_CENTER_Y), 400, 1)
+        pygame.draw.circle(window, (225, 225, 225), (RADAR_CENTER_X, RADAR_CENTER_Y), 500, 1)
+        
+        #Draw range labels
+        draw_text.normal(window, str(round(range_km * 0.2)), text_font3, (225, 225, 225), RADAR_CENTER_X - 95, RADAR_CENTER_Y - 5)
+        draw_text.normal(window, str(round(range_km * 0.4)), text_font3, (225, 225, 225), RADAR_CENTER_X - 195, RADAR_CENTER_Y - 5)
+        draw_text.normal(window, str(round(range_km * 0.6)), text_font3, (225, 225, 225), RADAR_CENTER_X - 295, RADAR_CENTER_Y - 5)
+        draw_text.normal(window, str(round(range_km * 0.8)), text_font3, (225, 225, 225), RADAR_CENTER_X - 395, RADAR_CENTER_Y - 5)
+        draw_text.normal(window, str(round(range_km)), text_font3, (225, 225, 225), RADAR_CENTER_X - 495, RADAR_CENTER_Y - 5)
+        
+        #Draw center point
+        if not map_enabled:
+            pygame.draw.polygon(window, (0, 255, 255), [(RADAR_CENTER_X, RADAR_CENTER_Y - 2), (RADAR_CENTER_X + 2, RADAR_CENTER_Y), (RADAR_CENTER_X, RADAR_CENTER_Y + 2), (RADAR_CENTER_X - 2, RADAR_CENTER_Y)])
+        
+        #Draw airports
+        for key in airport_db.airports_uk:
+            airport = airport_db.airports_uk[key]
+            x, y = functions.coords_to_xy(airport["lat"], airport["lon"], range_km, _config['myLat'], _config['myLon'], width, height, RADAR_CENTER_X, RADAR_CENTER_Y)
+            pygame.draw.polygon(window, (0, 0, 255), [(x, y - 2), (x + 2, y), (x, y + 2), (x - 2, y)])
+            draw_text.center(window, airport["airport_name"], text_font3, (255, 255, 255), x, y - 10)
+        
+        #Draw planes
+        displayed_count = 0
+        incomplete_count = 0
+        
+        with data_lock:
+            for icao in list(displayed_planes.keys()):
+                display_data = displayed_planes[icao]
+                plane = display_data["plane_data"]
                 
-                pygame.draw.rect(window, (0, 0, 0), (570, 10, 220, 460), 0, 5)
+                lat = plane.get("last_lat")
+                lon = plane.get("last_lon")
                 
-                draw_text.center(window, current_time_str, text_font2, (255, 0, 0), 675, 40)
-                draw_text.center(window, f"CPU:{round(cpu_temp)}°C  RAM:{ram_percentage}%", text_font1, (255, 255, 255), 675, 75)
+                if lat is None or lon is None:
+                    continue
                 
-                #Status
-                if is_receiving:
-                    status = "Receiving"
-                elif is_processing:
-                    status = "Processing"
-                else:
-                    status = "Idle"
+                displayed_count += 1
                 
-                display_rgb = (255, 255, 255)
-                if displayed_count < 10:
-                    display_rgb = (255, 0, 0)
-                elif displayed_count < 20:
-                    display_rgb = (255, 255, 0)
-                else:
-                    display_rgb = (0, 255, 0)
-                
-                draw_text.center(window, f"Status: {status}", text_font1, (255, 255, 255), 675, 100)
-                draw_text.center(window, f"Active: {displayed_count}", text_font1, display_rgb, 675, 135)
-                
-                #Message log
-                pygame.draw.rect(window, (255, 255, 255), (580, 155, 200, 240), 2)
-                
-                y = 159
-                with data_lock:
-                    for message in message_queue[-23:]:
-                        if "WARNING" in message:
-                            draw_text.normal(window, str(message), text_font3, (255, 0, 0), 585, y)
-                        elif "NEW" in message:
-                            draw_text.normal(window, str(message), text_font3, (0, 255, 0), 585, y)
-                        else:
-                            draw_text.normal(window, str(message), text_font3, (255, 255, 255), 585, y)
-                            
-                        y += 10
-                
-                #Buttons
-                window.blit(image2, close_menu_image)
-                window.blit(image3, zoom_in_image)
-                window.blit(image4, zoom_out_image)
-                window.blit(image7, off_image)
-                
+                #Check if plane has complete data
+                has_complete_data = True
                 if not offline:
-                    window.blit(image5, online_image)
-                else:
-                    window.blit(image6, offline_image)
-            else:
-                window.blit(image1, open_menu_image)
-        else:
-            #Enable screen saver 
-            pygame.draw.rect(window, (0, 0, 0), (0, 0, width, height))
+                    owner = plane.get("owner", "-")
+                    model = plane.get('model', '-')
+                    manufacturer = plane.get('manufacturer', '-')
+                    if owner == "-" or model == "-" or manufacturer == "-":
+                        has_complete_data = False
+                        incomplete_count += 1
+                
+                #Calculate fade
+                time_remaining = display_data["display_until"] - current_time
+                if time_remaining <= 0:
+                    continue
+                
+                fade_value = 255
+                if time_remaining < fade_duration:
+                    fade_value = int(255 * (time_remaining / fade_duration))
+                    if fade_value < 10:
+                        fade_value = 10
+                
+                #Draw plane
+                try:
+                    x, y = functions.coords_to_xy(float(lat), float(lon), range_km, _config['myLat'], _config['myLon'], width, height, RADAR_CENTER_X, RADAR_CENTER_Y)
+                    
+                    prev_lat = plane.get("prev_lat")
+                    prev_lon = plane.get("prev_lon")
+                    
+                    if prev_lat is not None and prev_lon is not None:
+                        heading = functions.calculate_heading(prev_lat, prev_lon, lat, lon)
+                        
+                        colored_icon = plane_icon.copy()
+                        colored_icon.fill((255, 202, 0), special_flags=pygame.BLEND_RGB_MULT)
+                        colored_icon.set_alpha(fade_value)
+                        
+                        rotated_image = pygame.transform.rotate(colored_icon, heading)
+                        new_rect = rotated_image.get_rect(center=(x, y))
+                        window.blit(rotated_image, new_rect)
+                        
+                        #Draw labels based on data availability
+                        if has_complete_data and not offline:
+                            manufacturer = plane.get('manufacturer', '-')
+                            model = plane.get('model', '-')
+                            owner = plane.get("owner", "-")
+                            
+                            plane_string = f"{manufacturer} {model}"
+                            
+                            draw_text.fading(window, owner, text_font3, (255, 202, 0), x, y - 13, fade_value)
+                            draw_text.fading(window, plane_string, text_font3, (255, 202, 0), x, y + 13, fade_value)
+                        else:
+                            #Show ICAO and altitude only (offline data)
+                            altitude = plane.get("altitude", "-")
+                            draw_text.fading(window, icao, text_font3, (255, 202, 0), x, y - 13, fade_value)
+                            draw_text.fading(window, f"{altitude}ft", text_font3, (255, 202, 0), x, y + 13, fade_value)
+                            
+                except Exception as e:
+                    print(f"Draw error for {icao}: {e}")
+        
+        #Reset clip for UI elements outside radar
+        window.set_clip(None)
+        
+        #Draw radar border
+        pygame.draw.rect(window, (0, 255, 0), RADAR_RECT, 2)
+        
+        #Draw Off button
+        pygame.draw.rect(window, (255, 0, 0), off_button_rect)
         
         pygame.display.update()
         time.sleep(0.05)

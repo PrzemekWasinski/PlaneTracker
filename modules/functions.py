@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import socket
 import time
 import os
@@ -53,15 +51,19 @@ def connect(server): #Connects to ADSB receiver
             print(f"Failed to connect: {error}. Attempting to reconnect")
             time.sleep(3)
 
-def coords_to_xy(lat, lon, range_km, centre_lat, centre_lon, screen_width, screen_height): #Converts coordinates to pixel positions for the radar display
-    km_per_px = (range_km * 2) / screen_width
+def coords_to_xy(lat, lon, range_km, centre_lat, centre_lon, screen_width, screen_height, center_x=None, center_y=None): #Converts coordinates to pixel positions for the radar display
+    if center_x is None: center_x = screen_width // 2
+    if center_y is None: center_y = screen_height // 2
+    
+    # Use 1024px as the reference diameter for scaling the radar range
+    km_per_px = (range_km * 2) / 1024
 
     delta_lat = lat - centre_lat
     delta_lon = lon - centre_lon
     dy = delta_lat * 111  
     dx = delta_lon * 111 * math.cos(math.radians(centre_lat)) 
-    x = screen_width // 2 + int(dx / km_per_px)
-    y = screen_height // 2 - int(dy / km_per_px)  
+    x = center_x + int(dx / km_per_px)
+    y = center_y - int(dy / km_per_px)  
 
     return x, y
 
