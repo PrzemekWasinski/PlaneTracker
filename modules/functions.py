@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import socket
 import time
 import os
@@ -14,6 +12,7 @@ from datetime import datetime
 from time import strftime, localtime
 from collections import Counter
 import yaml
+import shutil
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, '..', 'config', 'config.yml')
@@ -53,17 +52,39 @@ def connect(server): #Connects to ADSB receiver
             print(f"Failed to connect: {error}. Attempting to reconnect")
             time.sleep(3)
 
-def coords_to_xy(lat, lon, range_km, centre_lat, centre_lon, screen_width, screen_height): #Converts coordinates to pixel positions for the radar display
-    km_per_px = (range_km * 2) / screen_width
+def coords_to_xy(lat, lon, range_km, centre_lat, centre_lon, screen_width, screen_height, center_x=None, center_y=None): #Converts coordinates to pixel positions for the radar display
+    if center_x is None: center_x = screen_width // 2
+    if center_y is None: center_y = screen_height // 2
+    
+    # Use 1024px as the reference diameter for scaling the radar range
+    km_per_px = (range_km * 2) / 1024
 
     delta_lat = lat - centre_lat
     delta_lon = lon - centre_lon
     dy = delta_lat * 111  
     dx = delta_lon * 111 * math.cos(math.radians(centre_lat)) 
-    x = screen_width // 2 + int(dx / km_per_px)
-    y = screen_height // 2 - int(dy / km_per_px)  
+    x = center_x + int(dx / km_per_px)
+    y = center_y - int(dy / km_per_px)  
 
     return x, y
+
+def get_disk_free(): #Returns free disk space in GB
+    try:
+        total, used, free = shutil.disk_usage("/")
+        return round(free / (2**30), 1)
+    except:
+        return 0.0
+
+def calculate_distance(lat1, lon1, lat2, lon2): #Calculates distance between two points in km
+    try:
+        R = 6371 # Earth radius
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return round(R * c, 1)
+    except:
+        return 0.0
 
 def split_message(message):
     plane_info = message.split(",")
@@ -71,13 +92,35 @@ def split_message(message):
     if len(plane_info) < 15 or plane_info[0] != "MSG":
         return None
     
+    try:
+        lat = float(plane_info[14])
+        lon = float(plane_info[15])
+    except (ValueError, IndexError):
+        lat = "-"
+        lon = "-"
+
+    try:
+        altitude = int(plane_info[11])
+    except (ValueError, IndexError):
+        altitude = "-"
+
+    try:
+        speed = float(plane_info[12])
+    except (ValueError, IndexError):
+        speed = "-"
+        
+    try:
+        track = float(plane_info[13])
+    except (ValueError, IndexError):
+        track = "-"
+
     return {
         "icao": plane_info[4] or "-", 
-        "altitude": plane_info[11] or "-",
-        "speed": plane_info[12] or "-",
-        "track": plane_info[13] or "-",
-        "lat": plane_info[14] or "-",
-        "lon": plane_info[15] or "-",
+        "altitude": altitude,
+        "speed": speed,
+        "track": track,
+        "lat": lat,
+        "lon": lon,
         "manufacturer": "-",
         "registration": "-",
         "icao_type_code": "-",
@@ -150,12 +193,17 @@ def get_stats():
             top_manufacturer = manufacturer_counter.most_common(1)[0] if manufacturer_counter else (None, 0)
             top_airline = airline_counter.most_common(1)[0] if airline_counter else (None, 0)
 
+            #Clean manufacturer_breakdown keys for firebase
+            clean_manufacturer_breakdown = {
+                clean_string(k): v for k, v in manufacturer_counter.items()
+            }
+
             return {
                 'total': len(planes),
                 'top_model': {'name': top_model[0], 'count': top_model[1]},
                 'top_manufacturer': {'name': top_manufacturer[0], 'count': top_manufacturer[1]},
                 'top_airline': {'name': top_airline[0], 'count': top_airline[1]},
-                'manufacturer_breakdown': dict(manufacturer_counter),
+                'manufacturer_breakdown': clean_manufacturer_breakdown,  # ← Now cleaned!
                 'last_updated': strftime("%H:%M:%S", localtime())
             }
 
