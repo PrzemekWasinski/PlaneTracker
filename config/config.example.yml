@@ -13,5 +13,8 @@ tgtLon: 0.0
 tgtAlt: 0.0
 
 #Settings
+#default mode for pan tilt mount
 defaultMode: false
+
+#offline mode for plane tracking
 offlineMode: false

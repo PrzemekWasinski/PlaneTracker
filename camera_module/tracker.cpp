@@ -1,193 +1,275 @@
 #include <iostream>
-#include <fstream> 
-#include <string> 
+#include <fstream>
+#include <string>
 #include <cmath>
 #include <pigpio.h>
-#include "pan_tilt.hpp"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#include <cstring>
+#include <thread>
+#include <chrono>
 
-#define DEG2RAD (M_PI / 180.0)
-#define RAD2DEG (180.0 / M_PI)
+//SERVO PINS
+const int PAN_PIN  = 18;
+const int TILT_PIN = 19;
 
-double myLat, myLon, myAlt;
-double tgtLat, tgtLon, tgtAlt;
-bool defaultMode = false;
+//SERVO CALIBRATION
 
-PanTilt pt;
+const int TILT_INPUT_MIN  = 15; //Max 15 degrees due to physical blockage
+const int TILT_INPUT_MAX  = 270;
 
-//load config
-void loadConfig() {
-    std::string configPath = "config.yaml";
-    std::ifstream file(configPath);
-    
-    // If not found in current dir, try ../config/
-    if (!file.good()) {
-        file.close();
-        configPath = "../config/config.yaml";
-        file.open(configPath);
+const int PWM_FREQ        = 50;
+const int PULSE_MIN_US    = 400;
+const int PULSE_MAX_US    = 2500;
+const int SERVO_INPUT_MAX = 270;
+
+bool busy = false;
+
+//Load yaml
+struct HomeConfig {
+    double lat          = 0.0;
+    double lon          = 0.0;
+    double elevation    = 0.0;
+    double bearing      = 180.0;  
+    bool   pan_clockwise = false;  
+};
+
+static std::string trim(const std::string& s) {
+    size_t a = s.find_first_not_of(" \t\r\n");
+    size_t b = s.find_last_not_of(" \t\r\n");
+    return (a == std::string::npos) ? "" : s.substr(a, b - a + 1);
+}
+
+bool loadConfig(const std::string& path, HomeConfig& cfg) {
+    std::ifstream f(path);
+    if (!f.is_open()) {
+        std::cerr << "ERROR: Cannot open " << path << "\n";
+        return false;
     }
-    
-    if (!file.good()) {
-        std::cerr << "Error: Could not find config.yaml in ./ or ../config/\n";
-        return;
-    }
-    
-    std::cout << "Loading config from: " << configPath << "\n";
     std::string line;
-    while (std::getline(file, line)) {
-        if (line.empty() || line[0] == '#') continue;
+    while (std::getline(f, line)) {
+        size_t hash = line.find('#');
+        if (hash != std::string::npos) line = line.substr(0, hash);
         size_t colon = line.find(':');
         if (colon == std::string::npos) continue;
-        
-        std::string key = line.substr(0, colon);
-        std::string valStr = line.substr(colon + 1);
-        
-        // Trim whitespace from key and value
-        key.erase(0, key.find_first_not_of(" \t\n\r\f\v"));
-        key.erase(key.find_last_not_of(" \t\n\r\f\v") + 1);
-        valStr.erase(0, valStr.find_first_not_of(" \t\n\r\f\v"));
-        valStr.erase(valStr.find_last_not_of(" \t\n\r\f\v") + 1);
-
-        double val = 0.0;
-        try { val = std::stod(valStr); } catch(...) {} // Simple parse
-        
-        if (key == "myLat") myLat = val;
-        else if (key == "myLon") myLon = val;
-        else if (key == "myAlt") myAlt = val;
-        else if (key == "tgtLat") tgtLat = val;
-        else if (key == "tgtLon") tgtLon = val;
-        else if (key == "tgtAlt") tgtAlt = val;
-        else if (key == "defaultMode") defaultMode = (valStr.find("true") != std::string::npos);
+        std::string key = trim(line.substr(0, colon));
+        std::string val = trim(line.substr(colon + 1));
+        if (key.empty() || val.empty()) continue;
+        try {
+            if      (key == "home_lat")       cfg.lat          = std::stod(val);
+            else if (key == "home_lon")       cfg.lon          = std::stod(val);
+            else if (key == "home_elevation") cfg.elevation    = std::stod(val);
+            else if (key == "home_bearing")   cfg.bearing      = std::stod(val);
+            else if (key == "pan_clockwise")  cfg.pan_clockwise = (val == "true");
+        } catch (...) {
+            std::cerr << "WARNING: Could not parse value for key '" << key << "'\n";
+        }
     }
-    std::cout << "Loaded Config:\n";
-    std::cout << "  My Pos: " << myLat << ", " << myLon << ", " << myAlt << "m\n";
-    std::cout << "  Target: " << tgtLat << ", " << tgtLon << ", " << tgtAlt << "m\n";
+    return true;
 }
 
-// Calculate bearing (azimuth) from my position to target
-double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
-    double dLon = (lon2 - lon1) * DEG2RAD;
-    double y = sin(dLon) * cos(lat2 * DEG2RAD);
-    double x = cos(lat1 * DEG2RAD) * sin(lat2 * DEG2RAD) -
-               sin(lat1 * DEG2RAD) * cos(lat2 * DEG2RAD) * cos(dLon);
-    double bearing = atan2(y, x) * RAD2DEG;
-    
-    // Normalize to 0-360
-    bearing = fmod(bearing + 360.0, 360.0);
-    return bearing;
+//Motor angle calculation
+const double DEG2RAD = M_PI / 180.0;
+const double RAD2DEG = 180.0 / M_PI;
+const double EARTH_R = 6371000.0;
+
+double haversineBearing(double latA, double lonA, double latB, double lonB) {
+    double dLon = (lonB - lonA) * DEG2RAD;
+    double la   = latA * DEG2RAD;
+    double lb   = latB * DEG2RAD;
+    double y = std::sin(dLon) * std::cos(lb);
+    double x = std::cos(la) * std::sin(lb) - std::sin(la) * std::cos(lb) * std::cos(dLon);
+    return std::fmod(std::atan2(y, x) * RAD2DEG + 360.0, 360.0);
 }
 
-// Calculate distance and relative bearing for servo
-void calculateAngles(double &stepperAngle, double &servoAngle, bool &inRange) {
-    // Calculate bearing (azimuth) to target
-    double azimuth = calculateBearing(myLat, myLon, tgtLat, tgtLon);
-    
-    // Calculate horizontal distance using Haversine formula
-    double dLat = (tgtLat - myLat) * DEG2RAD;
-    double dLon = (tgtLon - myLon) * DEG2RAD;
-    double a = sin(dLat/2) * sin(dLat/2) +
-               cos(myLat * DEG2RAD) * cos(tgtLat * DEG2RAD) *
-               sin(dLon/2) * sin(dLon/2);
-    double c = 2 * atan2(sqrt(a), sqrt(1-a));
-    double horizontalDist = 6371000 * c;  // Earth radius in meters
-    
-    // Calculate elevation angle
-    double heightDiff = tgtAlt - myAlt;
-    double elevationAngle = atan2(heightDiff, horizontalDist) * RAD2DEG;
-    
-    std::cout << "\nTarget Analysis:\n";
-    std::cout << "  Azimuth: " << azimuth << "° (North=0, East=90, South=180, West=270)\n";
-    std::cout << "  Distance: " << horizontalDist << " m\n";
-    std::cout << "  Elevation: " << elevationAngle << "° (0=Horizon, 90=Zenith)\n";
-    
-    //Stepper = Pan (Azimuth)
-    //Servo = Tilt (Elevation)
-    
-    //set Stepper to Azimuth
-    stepperAngle = azimuth;
-    
-    //set Servo to Elevation
-    if (elevationAngle < -90) elevationAngle = -90;
-    if (elevationAngle > 90) elevationAngle = 90;
-    
-    servoAngle = 180.0 - elevationAngle; 
-    
-    //safety clamp for servo
-    if (servoAngle < 0) servoAngle = 0;
-    if (servoAngle > 180) servoAngle = 180;
-    
-    inRange = true;
-    
-    std::cout << "  Stepper Target (Azimuth): " << stepperAngle << "°\n";
-    std::cout << "  Servo Target (Angle): " << servoAngle << "° (180=Flat, 90=Up)\n";
+double haversineDistance(double latA, double lonA, double latB, double lonB) {
+    double dLat = (latB - latA) * DEG2RAD;
+    double dLon = (lonB - lonA) * DEG2RAD;
+    double a = std::sin(dLat / 2) * std::sin(dLat / 2)
+             + std::cos(latA * DEG2RAD) * std::cos(latB * DEG2RAD)
+             * std::sin(dLon / 2) * std::sin(dLon / 2);
+    return EARTH_R * 2.0 * std::atan2(std::sqrt(a), std::sqrt(1 - a));
 }
 
-void prepareForTracking() {
-    std::cout << "\n=== INITIALIZATION ===\n";
-    std::cout << "Loading saved state (Stepper should be at North/0°)...\n";
-    
-    std::cout << "\nSetting Servo to default default (Horizon/Flat)...\n";
-    pt.setServo(180.0);
-    
-    std::cout << "\nReady to track\n";
+double elevationAngle(double distanceM, double homeElevM, double targetElevM) {
+    double altDiff = targetElevM - homeElevM;
+    return std::atan2(altDiff, distanceM) * RAD2DEG;
 }
 
-void trackTarget() {
-    double stepperAngle, servoAngle;
-    bool inRange;
-    
-    calculateAngles(stepperAngle, servoAngle, inRange);
-    
-    std::cout << "\n=== TRACKING TARGET ===\n";
-    
-    if(inRange) {
-        pt.panToAngle(stepperAngle);
-        pt.setServo(servoAngle);
-        std::cout << "Tracking complete - pointing at target\n";
-        pt.saveState();
+
+struct ServoInputs {
+    int  pan;
+    int  tilt;
+    bool valid;
+    bool backMode;
+};
+
+ServoInputs computeServoInputs(double bearing, double elevDeg, double homeBearing, bool panClockwise) {
+    ServoInputs r = {0, 0, false, false};
+
+    bearing = std::fmod(bearing + 360.0, 360.0);
+
+    //If target below horizon (should never happen because planes fly high)
+    if (elevDeg < 0.0) return r;
+    if (elevDeg > 90.0) elevDeg = 90.0;
+
+    double diff;
+    if (panClockwise) {
+        diff = std::fmod(bearing - homeBearing + 360.0, 360.0);
     } else {
-        std::cout << "Target outside servo range!\n";
+        diff = std::fmod(homeBearing - bearing + 360.0, 360.0);
     }
+
+    bool backMode = (diff > 180.0);
+    r.backMode    = backMode;
+
+    double panDiff;
+    double tiltPhys;  
+
+    if (!backMode) {
+        panDiff  = diff;
+        tiltPhys = elevDeg;
+    } else {
+        panDiff  = diff - 180.0;      
+        tiltPhys = 180.0 - elevDeg;   
+    }
+
+    int panInput  = (int)std::round(panDiff  * (270.0 / 180.0));
+
+    int tiltInput = (int)std::round(tiltPhys * (270.0 / 180.0));
+
+    if (tiltInput < TILT_INPUT_MIN) tiltInput = TILT_INPUT_MIN;
+
+    if (panInput  < 0)              panInput  = 0;
+    if (panInput  > SERVO_INPUT_MAX) panInput  = SERVO_INPUT_MAX;
+    if (tiltInput > TILT_INPUT_MAX) tiltInput = TILT_INPUT_MAX;
+
+    r.pan   = panInput;
+    r.tilt  = tiltInput;
+    r.valid = true;
+    return r;
 }
 
+//SERVO DRIVER
+void setServo(int pin, int servoInput) {
+    int pulseUs = PULSE_MIN_US + (int)std::round(
+        (double)servoInput / SERVO_INPUT_MAX * (PULSE_MAX_US - PULSE_MIN_US)
+    );
+    unsigned int duty = (unsigned int)((double)pulseUs / 20000.0 * 1000000.0);
+    gpioHardwarePWM(pin, PWM_FREQ, duty);
+}
+
+void stopServos() {
+    gpioHardwarePWM(PAN_PIN,  0, 0);
+    gpioHardwarePWM(TILT_PIN, 0, 0);
+}
+
+//Tracking function
+void trackPlane(double lat, double lon, double alt, HomeConfig& cfg, int client_socket) {
+    busy = true;
+
+    // use local parameters rather than modifying the const test targets
+    double bearing = haversineBearing(cfg.lat, cfg.lon, lat, lon);
+    double distance = haversineDistance(cfg.lat, cfg.lon, lat, lon);
+    double elev = elevationAngle(distance, cfg.elevation, alt);
+
+    ServoInputs s = computeServoInputs(bearing, elev, cfg.bearing, cfg.pan_clockwise);
+
+    if (!s.valid) {
+        send(client_socket, "error", strlen("error"), 0);
+        close(client_socket);
+        busy = false;
+        return;
+    }
+
+    if (gpioInitialise() < 0) {
+        send(client_socket, "error", strlen("error"), 0);
+        close(client_socket);
+        busy = false;
+        return;
+    }
+
+    gpioSetMode(PAN_PIN, PI_OUTPUT);
+    gpioSetMode(TILT_PIN, PI_OUTPUT);
+
+    setServo(PAN_PIN, s.pan);
+    setServo(TILT_PIN, s.tilt);
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    stopServos();
+    gpioTerminate();
+
+    send(client_socket, "success", strlen("success"), 0);
+    close(client_socket);
+    busy = false;
+}
+
+//Main loop
 int main() {
-    if(gpioInitialise() < 0) {
-        std::cerr << "pigpio initialization failed\n";
+    HomeConfig cfg;
+    if (!loadConfig("home.yaml", cfg)) return 1;
+
+    std::cout << "\n--------------------------------------------\n";
+    std::cout << "  Camera Tracker Server\n";
+    std::cout << "--------------------------------------------\n";
+    std::cout << "  Home   : " << cfg.lat << "°, " << cfg.lon << "°"
+              << " @ " << cfg.elevation << " m\n";
+    std::cout << "  Home bearing (pan=0): " << cfg.bearing << "°\n";
+    std::cout << "  Pan direction: "
+              << (cfg.pan_clockwise ? "clockwise" : "counter-clockwise") << "\n";
+    std::cout << "--------------------------------------------\n";
+    std::cout << "  Listening on port 12345...\n\n";
+
+    int server_fd, new_socket;
+    struct sockaddr_in address;
+    int addrlen = sizeof(address);
+
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        perror("socket failed");
         return 1;
     }
-    
-    loadConfig(); //load coordinates from file
-    
-    pt.init();
-    
-    //load state
-    pt.loadState();
-    
-    std::cout << "Pan-Tilt Aircraft Tracker\n";
-    std::cout << "========================\n";
-    std::cout << "Servo Configuration:\n";
-    std::cout << "  180° = Horizon (Flat)\n";
-    std::cout << "  90°  = Up (Zenith)\n\n";
-    
-    //prepare set servo to horizon assume stepper is North
-    prepareForTracking();
-    
-    gpioDelay(2000000);  //2 seconds
-    
-    //Track target if not in default mode
-    if(!defaultMode) {
-        trackTarget();
-        gpioDelay(5000000);  //Hold position for 5 seconds
-    } else {
-        std::cout << "\nDefault mode active staying at default position\n";
-        gpioDelay(5000000);
+
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(12345);
+
+    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+        perror("bind failed");
+        return 1;
     }
-    
-    // Removed auto-return. We leave it at target position and save state.
-    std::cout << "\nStopping at target position run calibrate -> r to reset.\n";
-    
-    pt.cleanup();
-    pt.saveState(); // Save final state
-    
-    gpioTerminate();
+
+    if (listen(server_fd, 3) < 0) {
+        perror("listen");
+        return 1;
+    }
+
+    while (true) {
+        if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
+            perror("accept");
+            continue;
+        }
+
+        char buffer[1024] = {0};
+        int valread = read(new_socket, buffer, 1024);
+
+        if (busy) {
+            send(new_socket, "busy", strlen("busy"), 0);
+            close(new_socket);
+            continue;
+        }
+
+        double lat, lon, alt;
+        if (sscanf(buffer, "%lf,%lf,%lf", &lat, &lon, &alt) != 3) {
+            send(new_socket, "error", strlen("error"), 0);
+            close(new_socket);
+            continue;
+        }
+
+        std::thread tracker_thread(trackPlane, lat, lon, alt, std::ref(cfg), new_socket);
+        tracker_thread.detach();
+    }
+
     return 0;
 }

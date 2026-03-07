@@ -1,0 +1,12 @@
+#Home Position
+home_lat: 0     
+home_lon: 0      
+home_elevation: 0 
+
+#Camera Orientation
+home_bearing: 180.0
+
+#Pan rotation direction: 
+#true = increasing input rotates clockwise (bearing increases)
+#false = increasing input rotates counter-clockwise (bearing decreases)
+pan_clockwise: false

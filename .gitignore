@@ -10,3 +10,5 @@ stats_history/
 textures
 
 /config/config.yml
+/camera_module/home.yaml
+/camera_module/build/*

@@ -19,7 +19,7 @@ CONFIG_PATH = os.path.join(BASE_DIR, '..', 'config', 'config.yml')
 
 def load_config():
     if not os.path.exists(CONFIG_PATH):
-        print(f"{CONFIG_PATH} not found creating default config.")
+        print(f"{CONFIG_PATH} not found creating default config")
         with open(CONFIG_PATH, 'w') as f:
             yaml.dump({}, f)
     try:
@@ -56,7 +56,7 @@ def coords_to_xy(lat, lon, range_km, centre_lat, centre_lon, screen_width, scree
     if center_x is None: center_x = screen_width // 2
     if center_y is None: center_y = screen_height // 2
     
-    # Use 1024px as the reference diameter for scaling the radar range
+    #Use 1024px as the reference diameter for scaling the radar range
     km_per_px = (range_km * 2) / 1024
 
     delta_lat = lat - centre_lat
@@ -161,51 +161,62 @@ def get_stats():
         return default_stats
 
     try:
-        with open(csv_path, 'r', newline='', encoding='utf-8') as file:
-            reader = csv.DictReader(file)
-            planes = []
+        # Use file locking when reading
+        lock_path = csv_path + '.lock'
+        with open(lock_path, 'w') as lock_file:
+            import fcntl
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH)  # Shared lock for reading
+            
+            try:
+                with open(csv_path, 'r', newline='', encoding='utf-8') as file:
+                    reader = csv.DictReader(file)
+                    planes = []
 
-            for row in reader:
-                if not row.get('icao'):
-                    continue
+                    for row in reader:
+                        if not row.get('icao'):
+                            continue
 
-                manufacturer = row.get('manufacturer', '').strip()
-                model = row.get('model', '').strip()
-                airline = row.get('airline', '').strip()
+                        manufacturer = row.get('manufacturer', '').strip()
+                        model = row.get('model', '').strip()
+                        airline = row.get('airline', '').strip()
 
-                if '-' in (manufacturer, model, airline):
-                    continue
+                        # Skip if any field is missing, empty, or is the '-' placeholder
+                        if not manufacturer or not model or not airline or \
+                           manufacturer == '-' or model == '-' or airline == '-':
+                            continue
 
-                planes.append({
-                    'manufacturer': manufacturer,
-                    'model': model,
-                    'airline': airline
-                })
+                        planes.append({
+                            'manufacturer': manufacturer,
+                            'model': model,
+                            'airline': airline
+                        })
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
-            if not planes:
-                return default_stats
+        if not planes:
+            return default_stats
 
-            model_counter = Counter(p['model'] for p in planes)
-            manufacturer_counter = Counter(p['manufacturer'] for p in planes)
-            airline_counter = Counter(p['airline'] for p in planes)
+        model_counter = Counter(p['model'] for p in planes)
+        manufacturer_counter = Counter(p['manufacturer'] for p in planes)
+        airline_counter = Counter(p['airline'] for p in planes)
 
-            top_model = model_counter.most_common(1)[0] if model_counter else (None, 0)
-            top_manufacturer = manufacturer_counter.most_common(1)[0] if manufacturer_counter else (None, 0)
-            top_airline = airline_counter.most_common(1)[0] if airline_counter else (None, 0)
+        top_model = model_counter.most_common(1)[0] if model_counter else (None, 0)
+        top_manufacturer = manufacturer_counter.most_common(1)[0] if manufacturer_counter else (None, 0)
+        top_airline = airline_counter.most_common(1)[0] if airline_counter else (None, 0)
 
-            #Clean manufacturer_breakdown keys for firebase
-            clean_manufacturer_breakdown = {
-                clean_string(k): v for k, v in manufacturer_counter.items()
-            }
+        #Clean manufacturer_breakdown keys for firebase
+        clean_manufacturer_breakdown = {
+            clean_string(k): v for k, v in manufacturer_counter.items()
+        }
 
-            return {
-                'total': len(planes),
-                'top_model': {'name': top_model[0], 'count': top_model[1]},
-                'top_manufacturer': {'name': top_manufacturer[0], 'count': top_manufacturer[1]},
-                'top_airline': {'name': top_airline[0], 'count': top_airline[1]},
-                'manufacturer_breakdown': clean_manufacturer_breakdown,  # ← Now cleaned!
-                'last_updated': strftime("%H:%M:%S", localtime())
-            }
+        return {
+            'total': len(planes),
+            'top_model': {'name': top_model[0], 'count': top_model[1]},
+            'top_manufacturer': {'name': top_manufacturer[0], 'count': top_manufacturer[1]},
+            'top_airline': {'name': top_airline[0], 'count': top_airline[1]},
+            'manufacturer_breakdown': clean_manufacturer_breakdown,
+            'last_updated': strftime("%H:%M:%S", localtime())
+        }
 
     except (FileNotFoundError, PermissionError, csv.Error, UnicodeDecodeError) as e:
         print(f"Error reading stats file: {e}")
