@@ -13,6 +13,7 @@ import requests
 import csv
 import math
 import fcntl 
+from collections import deque
 
 from modules import draw_text, functions, airport_db
 
@@ -44,6 +45,215 @@ PLANE_API_RETRY_DELAY = 60  #Wait 60 seconds before retrying a failed plane
 #Thread lock for shared data
 data_lock = threading.Lock()
 
+#Graph history settings
+TOP_GRAPH_HISTORY_SECONDS = 24 * 60 * 60
+PLANE_GRAPH_HISTORY_SECONDS = 30 * 60
+GRAPH_SAMPLE_INTERVAL = 60
+PLANE_ALTITUDE_SAMPLE_INTERVAL = 0
+PLANE_HIT_SAMPLE_INTERVAL = 60
+TOP_GRAPH_HISTORY_DIR = "stats_history"
+
+#Rolling graph data
+active_count_history = deque()
+total_seen_history = deque()
+
+#Activity spectrogram state
+ACTIVITY_SPECTRUM_SECONDS = 120
+ACTIVITY_SPECTRUM_BINS = 96
+activity_spectrum_rows = deque()
+activity_messages_this_second = 0
+activity_last_flush = time.time()
+
+def prune_history(history, max_age_seconds, now=None):
+    now = now or time.time()
+    cutoff = now - max_age_seconds
+    while history and history[0][0] < cutoff:
+        history.popleft()
+
+def append_sample(history, value, sample_interval, now=None):
+    now = now or time.time()
+    if sample_interval <= 0:
+        history.append((now, value))
+        return
+
+    bucket_time = int(now // sample_interval) * sample_interval
+    if history and history[-1][0] == bucket_time:
+        history[-1] = (bucket_time, value)
+    else:
+        history.append((bucket_time, value))
+
+def get_top_graph_history_path(now=None):
+    now = datetime.fromtimestamp(now or time.time())
+    return os.path.join(TOP_GRAPH_HISTORY_DIR, f"graph_history_{now.strftime('%Y-%m-%d')}.csv")
+
+
+def load_top_graph_history(now=None):
+    global top_graph_last_bucket
+
+    now = now or time.time()
+    cutoff = now - TOP_GRAPH_HISTORY_SECONDS
+    history_path = get_top_graph_history_path(now)
+    active_count_history.clear()
+    total_seen_history.clear()
+    top_graph_last_bucket = None
+
+    if not os.path.exists(history_path):
+        return
+
+    try:
+        with open(history_path, 'r', newline='', encoding='utf-8') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                try:
+                    bucket_time = datetime.strptime(row['timestamp'], "%Y-%m-%d %H:%M:%S").timestamp()
+                    active_value = int(row['active_count'])
+                    total_value = int(row['total_seen'])
+                except (KeyError, TypeError, ValueError):
+                    continue
+
+                if bucket_time < cutoff:
+                    continue
+
+                active_count_history.append((bucket_time, active_value))
+                total_seen_history.append((bucket_time, total_value))
+
+        if active_count_history:
+            top_graph_last_bucket = active_count_history[-1][0]
+    except (FileNotFoundError, PermissionError, OSError, csv.Error):
+        pass
+
+    prune_history(active_count_history, TOP_GRAPH_HISTORY_SECONDS, now)
+    prune_history(total_seen_history, TOP_GRAPH_HISTORY_SECONDS, now)
+
+
+def persist_top_graph_sample(active_count, total_seen, now=None):
+    global top_graph_last_bucket
+
+    now = now or time.time()
+    bucket_time = int(now // GRAPH_SAMPLE_INTERVAL) * GRAPH_SAMPLE_INTERVAL
+    history_path = get_top_graph_history_path(now)
+
+    append_sample(active_count_history, active_count, GRAPH_SAMPLE_INTERVAL, now)
+    prune_history(active_count_history, TOP_GRAPH_HISTORY_SECONDS, now)
+    append_sample(total_seen_history, total_seen, GRAPH_SAMPLE_INTERVAL, now)
+    prune_history(total_seen_history, TOP_GRAPH_HISTORY_SECONDS, now)
+
+    if top_graph_last_bucket == bucket_time:
+        return
+
+    try:
+        os.makedirs(TOP_GRAPH_HISTORY_DIR, exist_ok=True)
+        file_exists = os.path.exists(history_path)
+
+        with open(history_path, 'a', newline='', encoding='utf-8') as file:
+            fieldnames = ['timestamp', 'active_count', 'total_seen']
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow({
+                'timestamp': datetime.fromtimestamp(bucket_time).strftime("%Y-%m-%d %H:%M:%S"),
+                'active_count': int(active_count),
+                'total_seen': int(total_seen)
+            })
+    except (PermissionError, OSError, csv.Error):
+        return
+
+    top_graph_last_bucket = bucket_time
+
+def plane_matches_altitude_filter(plane_data):
+    altitude_value = plane_data.get("altitude")
+    try:
+        altitude_value = float(altitude_value)
+    except (TypeError, ValueError):
+        return False
+
+    if altitude_filter_above:
+        return altitude_value >= altitude_filter_threshold
+    return altitude_value <= altitude_filter_threshold
+
+
+def draw_altitude_filter(surface, panel_rect, checkbox_rect, slider_track_rect, slider_handle_rect):
+    pygame.draw.rect(surface, (100, 100, 100), panel_rect, 1)
+
+    pygame.draw.rect(surface, (20, 20, 20), checkbox_rect, 0)
+    pygame.draw.rect(surface, (160, 160, 160), checkbox_rect, 1)
+    if altitude_filter_above:
+        pygame.draw.line(surface, (0, 255, 0), (checkbox_rect.left + 3, checkbox_rect.centery), (checkbox_rect.centerx, checkbox_rect.bottom - 4), 2)
+        pygame.draw.line(surface, (0, 255, 0), (checkbox_rect.centerx, checkbox_rect.bottom - 4), (checkbox_rect.right - 3, checkbox_rect.top + 3), 2)
+
+    mode_text = "ABOVE" if altitude_filter_above else "BELOW"
+    draw_text.normal(surface, mode_text, text_font3, (255, 255, 255), checkbox_rect.right + 8, checkbox_rect.top - 1)
+    draw_text.normal(surface, f"{int(altitude_filter_threshold)} FT", stat_font, (255, 255, 255), panel_rect.left + 8, checkbox_rect.bottom + 4)
+
+    pygame.draw.rect(surface, (35, 35, 35), slider_track_rect, 0)
+    pygame.draw.rect(surface, (100, 100, 100), slider_track_rect, 1)
+    pygame.draw.line(surface, (0, 255, 255), (slider_track_rect.centerx, slider_track_rect.top + 4), (slider_track_rect.centerx, slider_track_rect.bottom - 4), 3)
+
+    for alt_mark in [0, 10000, 20000, 30000, 40000, 50000]:
+        tick_ratio = 1.0 - (alt_mark / 50000.0)
+        tick_y = slider_track_rect.top + int(tick_ratio * slider_track_rect.height)
+        pygame.draw.line(surface, (120, 120, 120), (slider_track_rect.left, tick_y), (slider_track_rect.left + 8, tick_y), 1)
+        draw_text.normal(surface, f"{alt_mark // 1000}", graph_time_font, (180, 180, 180), slider_track_rect.right + 6, tick_y - 4)
+
+    pygame.draw.rect(surface, (255, 255, 0), slider_handle_rect, 0)
+    pygame.draw.rect(surface, (255, 255, 255), slider_handle_rect, 1)
+
+def draw_line_graph(surface, rect, samples, y_max, now=None, time_window_seconds=PLANE_GRAPH_HISTORY_SECONDS, title=None, border_color=(100, 100, 100)):
+    pygame.draw.rect(surface, border_color, rect, 1)
+
+    inner_rect = rect.inflate(-12, -12)
+    if inner_rect.width <= 1 or inner_rect.height <= 1:
+        return
+
+    plot_rect = inner_rect
+    pygame.draw.rect(surface, (15, 15, 15), inner_rect)
+
+    y_min = 0
+    y_max = max(1, int(y_max))
+    now = now or time.time()
+
+    if samples:
+        first_visible_time = samples[0][0]
+        min_time = max(first_visible_time, now - time_window_seconds)
+    else:
+        min_time = now - time_window_seconds
+    max_time = max(now, min_time + 1)
+
+    old_clip = surface.get_clip()
+    surface.set_clip(plot_rect)
+    pygame.draw.line(surface, (45, 45, 45), (plot_rect.left, plot_rect.bottom - 1), (plot_rect.right - 1, plot_rect.bottom - 1), 1)
+
+    if samples:
+        points = []
+        for timestamp, value in samples:
+            if timestamp < min_time or timestamp > max_time:
+                continue
+            x_ratio = (timestamp - min_time) / max(1, (max_time - min_time))
+            clamped_value = max(y_min, min(y_max, value))
+            y_ratio = (clamped_value - y_min) / max(1, (y_max - y_min))
+            x = plot_rect.left + int(x_ratio * (plot_rect.width - 1))
+            y = plot_rect.bottom - 1 - int(y_ratio * (plot_rect.height - 1))
+            x = max(plot_rect.left, min(plot_rect.right - 1, x))
+            y = max(plot_rect.top, min(plot_rect.bottom - 1, y))
+            points.append((x, y))
+
+        if len(points) >= 2:
+            pygame.draw.lines(surface, (0, 255, 255), False, points, 2)
+        for point in points:
+            pygame.draw.circle(surface, (255, 255, 0), point, 2)
+
+    surface.set_clip(old_clip)
+
+    y_max_img = text_font3.render(str(y_max), True, (255, 255, 255))
+    y_max_rect = y_max_img.get_rect(topleft=(rect.left + 6, rect.top + 3))
+    surface.blit(y_max_img, y_max_rect)
+
+    if title:
+        title_img = text_font3.render(title, True, (255, 255, 255))
+        title_rect = title_img.get_rect(topright=(rect.right - 6, rect.top + 3))
+        surface.blit(title_img, title_rect)
+    draw_text.normal(surface, "0", text_font3, (255, 255, 255), rect.left + 4, rect.bottom - 14)
+
 #PYGAME SETUP
 pygame.init()
 #pygame.mouse.set_visible(False)
@@ -57,6 +267,7 @@ text_font1 = pygame.font.Font(os.path.join("textures", "fonts", "NaturalMono-Bol
 text_font2 = pygame.font.Font(os.path.join("textures", "fonts", "DS-DIGI.TTF"), 40)
 text_font3 = pygame.font.Font(os.path.join("textures", "fonts", "NaturalMono-Bold.ttf"), 11)
 stat_font = pygame.font.Font(os.path.join("textures", "fonts", "NaturalMono-Bold.ttf"), 13)
+graph_time_font = pygame.font.Font(os.path.join("textures", "fonts", "NaturalMono-Bold.ttf"), 9)
 plane_identity_font = pygame.font.Font(os.path.join("textures", "fonts", "NaturalMono-Bold.ttf"), 12)
 
 #Load images
@@ -70,29 +281,34 @@ image7 = pygame.image.load(os.path.join("textures", "icons", "off.png"))
 plane_icon = pygame.image.load(os.path.join("textures", "icons", "plane.png")).convert_alpha()
 
 #Radar display settings
-RADAR_RECT = pygame.Rect(3, 1, 1024, 1024)
+RADAR_RECT = pygame.Rect(0, 0, 1080, 1080)
 RADAR_CENTER_X = RADAR_RECT.centerx
 RADAR_CENTER_Y = RADAR_RECT.centery
-RADAR_RADIUS = 512
+RADAR_RADIUS = 540
 
 #Sidebar settings
-SIDEBAR_X = 1035
+SIDEBAR_X = 1090
 SIDEBAR_WIDTH = width - SIDEBAR_X
 
-#UI Buttons - Keep zoom buttons for compatibility but they're optional now
+
+# UI Buttons - Start at SIDEBAR_X + 10, 10px spacing between buttons
 btn_w = 40
 btn_h = 40
-btn_spacing = (SIDEBAR_WIDTH - (5 * btn_w)) // 6
+btn_gap = 10
+toolbar_start_x = SIDEBAR_X + 5
 
-zoom_in_ctrl_rect = pygame.Rect(SIDEBAR_X + btn_spacing, height - 50, btn_w, btn_h)
-zoom_out_ctrl_rect = pygame.Rect(SIDEBAR_X + 2*btn_spacing + btn_w, height - 50, btn_w, btn_h)
-mode_toggle_rect = pygame.Rect(SIDEBAR_X + 3*btn_spacing + 2*btn_w, height - 50, btn_w, btn_h)
-future_button_rect = pygame.Rect(SIDEBAR_X + 4*btn_spacing + 3*btn_w, height - 50, btn_w, btn_h)
-off_button_rect = pygame.Rect(SIDEBAR_X + 5*btn_spacing + 4*btn_w, height - 50, btn_w, btn_h)
+zoom_in_ctrl_rect = pygame.Rect(toolbar_start_x, height - 50, btn_w, btn_h)
+zoom_out_ctrl_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 1, height - 50, btn_w, btn_h)
+mode_toggle_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 2, height - 50, btn_w, btn_h)
+future_button_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 3, height - 50, btn_w, btn_h)
+off_button_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 4, height - 50, btn_w, btn_h)
 
 #Global for plane selection
 selected_plane_icao = None
 plane_rects = {} 
+altitude_filter_threshold = 0
+altitude_filter_above = True
+altitude_filter_dragging = False
 
 #Animation variables for smooth panning
 is_animating = False
@@ -438,13 +654,11 @@ def adsb_processing_thread():
                 plane_data = functions.split_message(line)
                 if not plane_data or plane_data["lon"] == "-" or plane_data["lat"] == "-":
                     continue
-                
+
                 icao = plane_data['icao']
-                
                 effective_offline = offline or not network_available
 
                 with data_lock:
-                    is_new = icao not in active_planes
                     if icao in active_planes:
                         cached = active_planes[icao]
                         plane_data["manufacturer"] = cached.get("manufacturer", "-")
@@ -458,6 +672,10 @@ def adsb_processing_thread():
                         
                         #Preserve existing location_history
                         plane_data["location_history"] = cached.get("location_history", {})
+                        plane_data["altitude_history"] = cached.get("altitude_history", deque())
+                        plane_data["hit_history"] = cached.get("hit_history", deque())
+                        plane_data["last_hit_bucket"] = cached.get("last_hit_bucket")
+                        plane_data["last_hit_count"] = cached.get("last_hit_count", 0)
                     else:
                         plane_data["manufacturer"] = "-"
                         plane_data["registration"] = "-"
@@ -465,24 +683,48 @@ def adsb_processing_thread():
                         plane_data["model"] = "-"
                         plane_data["last_api_error"] = 0
                         plane_data["location_history"] = {}
+                        plane_data["altitude_history"] = deque()
+                        plane_data["hit_history"] = deque()
+                        plane_data["last_hit_bucket"] = None
+                        plane_data["last_hit_count"] = 0
                     
                     plane_data["last_lat"] = float(plane_data["lat"])
                     plane_data["last_lon"] = float(plane_data["lon"])
                     plane_data["last_update_time"] = time.time()
+                    current_timestamp = plane_data.get("spotted_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    current_epoch = time.time()
                     
                     #Build location_history for ALL planes (not just ones with API data)
                     if plane_data["lat"] != "-" and plane_data["lon"] != "-":
-                        timestamp = plane_data.get("spotted_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                        plane_data["location_history"][timestamp] = [float(plane_data["lat"]), float(plane_data["lon"])]
+                        plane_data["location_history"][current_timestamp] = [float(plane_data["lat"]), float(plane_data["lon"])]
+
+                    altitude_value = plane_data.get("altitude")
+                    if altitude_value not in (None, "-"):
+                        try:
+                            altitude_value = float(altitude_value)
+                            append_sample(plane_data["altitude_history"], altitude_value, PLANE_ALTITUDE_SAMPLE_INTERVAL, current_epoch)
+                            prune_history(plane_data["altitude_history"], PLANE_GRAPH_HISTORY_SECONDS, current_epoch)
+                        except (TypeError, ValueError):
+                            pass
+
+                    hit_bucket = int(current_epoch // PLANE_HIT_SAMPLE_INTERVAL) * PLANE_HIT_SAMPLE_INTERVAL
+                    if plane_data.get("last_hit_bucket") == hit_bucket:
+                        plane_data["last_hit_count"] += 1
+                        if plane_data["hit_history"] and plane_data["hit_history"][-1][0] == hit_bucket:
+                            plane_data["hit_history"][-1] = (hit_bucket, plane_data["last_hit_count"])
+                        else:
+                            plane_data["hit_history"].append((hit_bucket, plane_data["last_hit_count"]))
+                    else:
+                        plane_data["last_hit_bucket"] = hit_bucket
+                        plane_data["last_hit_count"] = 1
+                        plane_data["hit_history"].append((hit_bucket, 1))
+                    prune_history(plane_data["hit_history"], PLANE_GRAPH_HISTORY_SECONDS, current_epoch)
                     
                     active_planes[icao] = plane_data
                     displayed_planes[icao] = {
                         "plane_data": plane_data,
                         "display_until": time.time() + display_duration
                     }
-                    
-                    if is_new and plane_data["altitude"] != "-":
-                        threading.Thread(target=send_to_tracker, args=(plane_data["last_lat"], plane_data["last_lon"], float(plane_data["altitude"])), daemon=True).start()
                 
                 #If online mode no API data yet and enough time has passed since last error
                 if not effective_offline and plane_data["manufacturer"] == "-" and can_retry_plane_api(plane_data):
@@ -573,8 +815,10 @@ def main():
     global tracker_running, offline, selected_plane_icao
     global is_animating, animation_start_time, animation_start_lat, animation_start_lon
     global animation_target_lat, animation_target_lon, last_scroll_time
+    global altitude_filter_threshold, altitude_filter_above, altitude_filter_dragging
     
     start_time = time.time()
+    load_top_graph_history(start_time)
     range_km = 50
     map_enabled = False
     
@@ -584,6 +828,18 @@ def main():
     
     while True:
         current_time = time.time()
+        pic_y = 377
+        pic_h = 203
+        logs_y = pic_y + pic_h + 10
+        logs_h = (height - 50) - logs_y - 10
+        filter_panel_rect = pygame.Rect(SIDEBAR_X + (SIDEBAR_WIDTH // 2) + 10, logs_y + 215, int(SIDEBAR_WIDTH / 2 - 20), int(logs_h // 2))
+        filter_checkbox_rect = pygame.Rect(filter_panel_rect.left + 8, filter_panel_rect.top + 10, 14, 14)
+        slider_track_rect = pygame.Rect(filter_panel_rect.left + 28, filter_panel_rect.top + 48, 18, max(80, filter_panel_rect.height - 66))
+        track_plane_button_rect = pygame.Rect(SIDEBAR_X + 250, ((315 // 2) + 68) + 10, 40, 40)
+        slider_ratio = 1.0 - (altitude_filter_threshold / 50000.0)
+        slider_handle_y = slider_track_rect.top + int(slider_ratio * slider_track_rect.height) - 5
+        slider_handle_y = max(slider_track_rect.top - 5, min(slider_track_rect.bottom - 5, slider_handle_y))
+        filter_slider_handle_rect = pygame.Rect(slider_track_rect.left - 6, slider_handle_y, slider_track_rect.width + 12, 10)
         
         #Restart every 30 minutes
         if current_time - start_time > 1800:
@@ -639,6 +895,16 @@ def main():
                             
                             add_message(f"Zoomed to {range_km}km on home")
                 
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1:
+                    altitude_filter_dragging = False
+
+            elif event.type == pygame.MOUSEMOTION:
+                if altitude_filter_dragging:
+                    clamped_y = max(slider_track_rect.top, min(slider_track_rect.bottom, event.pos[1]))
+                    altitude_filter_threshold = int(round((1.0 - ((clamped_y - slider_track_rect.top) / max(1, slider_track_rect.height))) * 50000))
+                    altitude_filter_threshold = max(0, min(50000, altitude_filter_threshold))
+
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 #Only process left mouse button (button 1), ignore middle/right clicks and scroll buttons
                 if event.button != 1:
@@ -651,8 +917,45 @@ def main():
                 last_tap_time = time.time()
                 mouse_x, mouse_y = pygame.mouse.get_pos()
                 
-                #Toolbar Buttons
-                if zoom_in_ctrl_rect.collidepoint(mouse_x, mouse_y): #Zoom In
+                if filter_checkbox_rect.collidepoint(mouse_x, mouse_y):
+                    altitude_filter_above = not altitude_filter_above
+                    continue
+
+                if slider_track_rect.collidepoint(mouse_x, mouse_y) or filter_slider_handle_rect.collidepoint(mouse_x, mouse_y):
+                    altitude_filter_dragging = True
+                    clamped_y = max(slider_track_rect.top, min(slider_track_rect.bottom, mouse_y))
+                    altitude_filter_threshold = int(round((1.0 - ((clamped_y - slider_track_rect.top) / max(1, slider_track_rect.height))) * 50000))
+                    altitude_filter_threshold = max(0, min(50000, altitude_filter_threshold))
+                    continue
+
+                if track_plane_button_rect.collidepoint(mouse_x, mouse_y):
+                    target_icao = selected_plane_icao if (selected_plane_icao in displayed_planes) else None
+                    if not target_icao:
+                        min_track_dist = float("inf")
+                        with data_lock:
+                            for icao, display_data in displayed_planes.items():
+                                plane = display_data.get("plane_data", {})
+                                if not plane_matches_altitude_filter(plane):
+                                    continue
+                                lat = plane.get("last_lat")
+                                lon = plane.get("last_lon")
+                                if lat is None or lon is None:
+                                    continue
+                                dist = functions.calculate_distance(view_center_lat, view_center_lon, float(lat), float(lon))
+                                if dist < min_track_dist:
+                                    min_track_dist = dist
+                                    target_icao = icao
+                    if target_icao and target_icao in displayed_planes:
+                        plane_data = displayed_planes[target_icao]["plane_data"]
+                        alt_ft = plane_data.get("altitude", "-")
+                        if alt_ft != '-':
+                            threading.Thread(target=send_to_tracker, args=(plane_data['last_lat'], plane_data['last_lon'], float(alt_ft)), daemon=True).start()
+                            add_message(f"Aiming camera at {target_icao}")
+                        else:
+                            add_message("Target plane altitude unknown, cannot track")
+                    else:
+                        add_message("No target plane available for tracking")
+                    continue
                     if range_km > 25: 
                         range_km -= 25
                         #If a plane is manually selected, just change zoom - continuous tracking handles centering
@@ -827,6 +1130,8 @@ def main():
         with data_lock:
             for icao, display_data in displayed_planes.items():
                 plane = display_data.get("plane_data", {})
+                if not plane_matches_altitude_filter(plane):
+                    continue
                 lat = plane.get("last_lat")
                 lon = plane.get("last_lon")
                 if lat is not None and lon is not None:
@@ -848,6 +1153,8 @@ def main():
             for icao in list(displayed_planes.keys()):
                 display_data = displayed_planes[icao]
                 plane = display_data["plane_data"]
+                if not plane_matches_altitude_filter(plane):
+                    continue
                 lat = plane.get("last_lat")
                 lon = plane.get("last_lon")
                 if lat is None or lon is None: continue
@@ -948,8 +1255,10 @@ def main():
                     label_colour = (0, 255, 255) if icao == target_icao else (0, 255, 0)
                     
                     if not offline and plane.get('manufacturer') != "-":
+                        draw_text.fading(window, icao, text_font3, label_colour, x, y - 26, fade_value)
                         draw_text.fading(window, plane.get("owner", "-"), text_font3, label_colour, x, y - 13, fade_value)
                         draw_text.fading(window, f"{plane.get('manufacturer')} {plane.get('model')}", text_font3, label_colour, x, y + 13, fade_value)
+                        draw_text.fading(window, f"{plane.get('altitude', '-')}ft", text_font3, label_colour, x, y + 26, fade_value)
                     else:
                         draw_text.fading(window, icao, text_font3, label_colour, x, y - 13, fade_value)
                         draw_text.fading(window, f"{plane.get('altitude', '-')}ft", text_font3, label_colour, x, y + 13, fade_value)
@@ -978,45 +1287,106 @@ def main():
         disk_free = functions.get_disk_free()
         sys_y = 85
         col1 = SIDEBAR_X + 10
-        col2 = SIDEBAR_X + SIDEBAR_WIDTH // 2 + 5
-        draw_text.normal(window, f"TEMP:{round(cpu_temp)}°C", stat_font, (255, 255, 255), col1, sys_y)
-        draw_text.normal(window, f"RAM:{ram_percentage}%", stat_font, (255, 255, 255), col2, sys_y)
-        draw_text.normal(window, f"CPU:{psutil.cpu_percent()}%", stat_font, (255, 255, 255), col1, sys_y + 20)
-        draw_text.normal(window, f"DISK:{disk_free}GB", stat_font, (255, 255, 255), col2, sys_y + 20)
+        col2 = SIDEBAR_X + SIDEBAR_WIDTH // 2 - 250
+        draw_text.normal(window, f"TEMP:{round(cpu_temp)}C", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 20, 650)
+        draw_text.normal(window, f"RAM:{ram_percentage}%", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 20, 670)
+        draw_text.normal(window, f"CPU:{psutil.cpu_percent()}%", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 20, 690)
+        draw_text.normal(window, f"DISK:{disk_free}GB", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 20, 710)
 
         #Separator
-        pygame.draw.line(window, (100, 100, 100), (SIDEBAR_X + 5, sys_y + 44), (SIDEBAR_X + SIDEBAR_WIDTH - 10, sys_y + 44), 1)
+        pygame.draw.line(window, (100, 100, 100), (SIDEBAR_X + 5, sys_y - 10), (SIDEBAR_X + SIDEBAR_WIDTH - 10, sys_y - 10), 1)
+
+        active_graph_rect = pygame.Rect(SIDEBAR_X + 300, sys_y, 240, 130)
+        total_graph_rect = pygame.Rect(SIDEBAR_X + 580, sys_y, 240, 130)
+
+        stats = None
+        total_seen = 0
+        if not offline:
+            stats = functions.get_stats()
+            total_seen = stats.get('total', 0)
+
+        persist_top_graph_sample(displayed_count, total_seen, current_time)
+
+        active_peak = max((sample[1] for sample in active_count_history), default=0)
+        active_y_max = max(10, ((active_peak + 10 + 9) // 10) * 10)
+        draw_line_graph(window, active_graph_rect, list(active_count_history), active_y_max, current_time, TOP_GRAPH_HISTORY_SECONDS, "ACTIVE")
+        total_peak = max((sample[1] for sample in total_seen_history), default=0)
+        total_y_max = max(100, ((total_peak + 100 + 99) // 100) * 100)
+        draw_line_graph(window, total_graph_rect, list(total_seen_history), total_y_max, current_time, TOP_GRAPH_HISTORY_SECONDS, "TOTAL")
 
         #Flight stats
         if not offline:
-            stats = functions.get_stats()
-            f_y = 137
-            draw_text.normal(window, f"Total Seen: {stats['total']}", text_font3, (255, 255, 255), col1, f_y)
-            draw_text.normal(window, f"Top Mfg: {stats['top_manufacturer']['name'] or '-'}", text_font3, (255, 255, 255), col1, f_y + 20)
-            draw_text.normal(window, f"Top Type: {stats['top_model']['name'] or '-'}", text_font3, (255, 255, 255), col1, f_y + 40)
-            draw_text.normal(window, f"Top Airline: {stats['top_airline']['name'] or '-'}", text_font3, (255, 255, 255), col1, f_y + 60)
-            draw_text.normal(window, f"Active Count: {displayed_count}", text_font3, (0, 255, 0), col1, f_y + 80)
+            draw_text.normal(window, f"Total Seen: {stats['total']}", text_font3, (255, 255, 255), col1, sys_y)
+            draw_text.normal(window, f"Top Mfg: {stats['top_manufacturer']['name'] or '-'}", text_font3, (255, 255, 255), col1, sys_y + 20)
+            draw_text.normal(window, f"Top Type: {stats['top_model']['name'] or '-'}", text_font3, (255, 255, 255), col1, sys_y + 40)
+            draw_text.normal(window, f"Top Airline: {stats['top_airline']['name'] or '-'}", text_font3, (255, 255, 255), col1, sys_y + 60)
+            draw_text.normal(window, f"Active Count: {displayed_count}", text_font3, (0, 255, 0), col1, sys_y + 80)
+            draw_text.normal(window, f"Furthest Detected:", text_font3, (255, 255, 255), col1, sys_y + 100)
+            draw_text.normal(window, f"Highest Detected:", text_font3, (255, 255, 255), col1, sys_y + 120)
 
         #Sperator 2
-        separator_y = 235
-        pygame.draw.line(window, (100, 100, 100), (SIDEBAR_X + 5, separator_y + 2), (SIDEBAR_X + SIDEBAR_WIDTH - 10, separator_y + 2), 1)
-        
+        separator_y = (315 // 2) + 68
+        pygame.draw.line(window, (100, 100, 100), (SIDEBAR_X + 5, separator_y), (SIDEBAR_X + SIDEBAR_WIDTH - 10, separator_y), 1)
+
+        altitude_graph_rect = pygame.Rect(SIDEBAR_X + 300, separator_y + 10, 240, 130)
+        hits_graph_rect = pygame.Rect(SIDEBAR_X + 580, separator_y + 10, 240, 130)
+
+        #Track plane button!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        pygame.draw.rect(window, (100, 100, 100), (SIDEBAR_X + 250, separator_y + 10, 40, 40))
+
         #Plane Info
         target_icao = selected_plane_icao if (selected_plane_icao in displayed_planes) else closest_plane
         p_data = displayed_planes.get(target_icao, {}).get("plane_data") if target_icao else None
+        graph_plane_icao = target_icao
+        graph_plane_data = p_data
+
+
+        altitude_samples = []
+        hit_samples = []
+        if graph_plane_data:
+            altitude_history = graph_plane_data.get("altitude_history", deque())
+            prune_history(altitude_history, PLANE_GRAPH_HISTORY_SECONDS, current_time)
+            altitude_samples = list(altitude_history)
+
+            hit_history = graph_plane_data.get("hit_history", deque())
+            prune_history(hit_history, PLANE_GRAPH_HISTORY_SECONDS, current_time)
+            hit_samples = list(hit_history)
+
+        draw_line_graph(window, altitude_graph_rect, altitude_samples, 50000, current_time, PLANE_GRAPH_HISTORY_SECONDS, "ALTITUDE")
+        hits_peak = max((sample[1] for sample in hit_samples), default=0)
+        hits_y_max = max(10, ((hits_peak + 10 + 9) // 10) * 10)
+        draw_line_graph(window, hits_graph_rect, hit_samples, hits_y_max, current_time, PLANE_GRAPH_HISTORY_SECONDS, "HITS")
         
         if p_data:
             mfg = p_data.get('manufacturer', '-')
             model = p_data.get('model', '-')
             owner = p_data.get('owner', '-')
             
+            reg = p_data.get('registration', '-')
+            alt = p_data.get('altitude', '-')
+            spd = p_data.get('speed', '-')
+            lat = p_data.get('last_lat', '-')
+            lon = p_data.get('last_lon', '-')
+            track = p_data.get('track', '-')
+
+            
+            
             id_y = separator_y + 10
-            draw_text.normal(window, f"{mfg} {model}", plane_identity_font, (255, 255, 255), col1, id_y)
-            draw_text.normal(window, f"{owner}", plane_identity_font, (255, 255, 255), col1, id_y + 20)
+            if not offline and mfg != "-" and model != "-":
+                draw_text.normal(window, f"{mfg} {model}", plane_identity_font, (255, 255, 255), col1, id_y)
+            else:
+                draw_text.normal(window, "Unidentified Aircraft", plane_identity_font, (255, 255, 255), col1, id_y)
+
+            if owner != "-":
+                draw_text.normal(window, f"{owner}", plane_identity_font, (255, 255, 255), col1, id_y + 20)
+            else:
+                draw_text.normal(window, f"Unidentified Airline", plane_identity_font, (255, 255, 255), col1, id_y + 20)
+
+            
             
             stat_y = id_y + 50
             lx = col1
-            rx = col2 - 10
+            rx = col2
             spacing = 18  
             
             def rnd(val, dec=1): 
@@ -1024,43 +1394,67 @@ def main():
                 except: return "-"
 
             #Row 1 ICAO / Reg
-            draw_text.normal(window, f"HEX: {target_icao}", stat_font, (200, 200, 200), col1, stat_y)
-            draw_text.normal(window, f"REG: {p_data.get('registration', '-')}", stat_font, (200, 200, 200), rx, stat_y)
+            if target_icao != '-':
+                draw_text.normal(window, f"HEX: {target_icao}", stat_font, (200, 200, 200), col1, stat_y)
+            else:
+                draw_text.normal(window, f"HEX: N/A", stat_font, (200, 200, 200), col1, stat_y)
+
+            if reg != '-':
+                draw_text.normal(window, f"REG: {reg}", stat_font, (200, 200, 200), rx, stat_y)
+            else:
+                draw_text.normal(window, f"REG: N/A", stat_font, (200, 200, 200), rx, stat_y)
             
             #Row 2 Alt / Speed
-            draw_text.normal(window, f"ALT: {p_data.get('altitude', '-')}ft", stat_font, (200, 200, 200), lx, stat_y + spacing)
-            draw_text.normal(window, f"SPD: {rnd(p_data.get('speed', '-'))}kt", stat_font, (200, 200, 200), rx, stat_y + spacing)
+            if alt != '-':
+                draw_text.normal(window, f"ALT: {alt}ft", stat_font, (200, 200, 200), lx, stat_y + spacing)
+            else:
+                draw_text.normal(window, f"ALT: N/A", stat_font, (200, 200, 200), lx, stat_y + spacing)
+
+            if spd != '-':
+                draw_text.normal(window, f"SPD: {spd}kt", stat_font, (200, 200, 200), rx, stat_y + spacing)
+            else:
+                draw_text.normal(window, f"SPD: N/A", stat_font, (200, 200, 200), rx, stat_y + spacing)
             
             #Row 3 Lat / Lon (4 decimals)
-            draw_text.normal(window, f"LAT: {rnd(p_data.get('last_lat', '-'), 4)}", stat_font, (200, 200, 200), lx, stat_y + spacing*2)
-            draw_text.normal(window, f"LON: {rnd(p_data.get('last_lon', '-'), 4)}", stat_font, (200, 200, 200), rx, stat_y + spacing*2)
+            if lat != '-':
+                draw_text.normal(window, f"LAT: {rnd(lat, 4)}", stat_font, (200, 200, 200), lx, stat_y + spacing*2)
+            else:
+                draw_text.normal(window, f"LAT: N/A", stat_font, (200, 200, 200), lx, stat_y + spacing*2)
+
+            if lon != '-':
+                draw_text.normal(window, f"LON: {rnd(lon, 4)}", stat_font, (200, 200, 200), rx, stat_y + spacing*2)
+            else:
+                draw_text.normal(window, f"LON: N/A", stat_font, (200, 200, 200), rx, stat_y + spacing*2)
             
             #Row 4 Hdg / Dist
-            draw_text.normal(window, f"HDG: {rnd(p_data.get('track', '-'), 0)}°", stat_font, (200, 200, 200), lx, stat_y + spacing*3)
+            if track != '-':
+                draw_text.normal(window, f"HDG: {rnd(track, 0)}deg", stat_font, (200, 200, 200), lx, stat_y + spacing*3)
+            else:                
+                draw_text.normal(window, f"HDG: N/A", stat_font, (200, 200, 200), lx, stat_y + spacing*3)
             
             dist_km = p_data.get('distance', '-')
             dist_nm = dist_km
             if dist_km != '-':
                 dist_nm = float(dist_km) / 1.852
-            draw_text.normal(window, f"DST: {rnd(dist_nm)}nm", stat_font, (200, 200, 200), rx, stat_y + spacing*3)
+            draw_text.normal(window, f"DST: {rnd(dist_nm, 2)}nm", stat_font, (200, 200, 200), rx, stat_y + spacing*3)
         else:
             draw_text.center(window, "NO PLANE SELECTED", text_font1, (100, 100, 100), SIDEBAR_X + SIDEBAR_WIDTH // 2, separator_y + 80)
 
         #Picture Placeholder
-        pic_y = 380
-        pic_h = 200
+        pic_y = 377
+        pic_h = 203
         pic_x = SIDEBAR_X + 5
         pic_w = SIDEBAR_WIDTH - 15
         pygame.draw.rect(window, (100, 100, 100), (pic_x, pic_y, pic_w, pic_h), 1)
 
-        #Text placeholder area
-        text_h = 40
-
         #LOGS BOX 
-        logs_y = pic_y + pic_h + text_h + 10
+        logs_y = pic_y + pic_h + 10
         logs_h = (height - 50) - logs_y - 10
-        pygame.draw.rect(window, (20, 20, 20), (SIDEBAR_X+5, logs_y, SIDEBAR_WIDTH-15, logs_h), 0)
-        pygame.draw.rect(window, (100, 100, 100), (SIDEBAR_X+5, logs_y, SIDEBAR_WIDTH-15, logs_h), 1)
+        pygame.draw.rect(window, (20, 20, 20), (SIDEBAR_X+5, logs_y, (SIDEBAR_WIDTH / 2) - 5, logs_h), 0)
+        pygame.draw.rect(window, (100, 100, 100), (SIDEBAR_X+5, logs_y, (SIDEBAR_WIDTH / 2) - 5, logs_h), 1)
+
+        #FILTERS
+        draw_altitude_filter(window, filter_panel_rect, filter_checkbox_rect, slider_track_rect, filter_slider_handle_rect)
         
         y_msg = logs_y + 10
         with data_lock:
@@ -1088,3 +1482,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

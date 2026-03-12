@@ -8,7 +8,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <thread>
-#include <chrono>
+#include <atomic>
 
 //SERVO PINS
 const int PAN_PIN  = 18;
@@ -24,7 +24,7 @@ const int PULSE_MIN_US    = 400;
 const int PULSE_MAX_US    = 2500;
 const int SERVO_INPUT_MAX = 270;
 
-bool busy = false;
+std::atomic<bool> busy(false);
 
 //Load yaml
 struct HomeConfig {
@@ -167,8 +167,6 @@ void stopServos() {
 
 //Tracking function
 void trackPlane(double lat, double lon, double alt, HomeConfig& cfg, int client_socket) {
-    busy = true;
-
     // use local parameters rather than modifying the const test targets
     double bearing = haversineBearing(cfg.lat, cfg.lon, lat, lon);
     double distance = haversineDistance(cfg.lat, cfg.lon, lat, lon);
@@ -179,14 +177,14 @@ void trackPlane(double lat, double lon, double alt, HomeConfig& cfg, int client_
     if (!s.valid) {
         send(client_socket, "error", strlen("error"), 0);
         close(client_socket);
-        busy = false;
+        busy.store(false);
         return;
     }
 
     if (gpioInitialise() < 0) {
         send(client_socket, "error", strlen("error"), 0);
         close(client_socket);
-        busy = false;
+        busy.store(false);
         return;
     }
 
@@ -196,14 +194,12 @@ void trackPlane(double lat, double lon, double alt, HomeConfig& cfg, int client_
     setServo(PAN_PIN, s.pan);
     setServo(TILT_PIN, s.tilt);
 
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-
     stopServos();
     gpioTerminate();
 
     send(client_socket, "success", strlen("success"), 0);
     close(client_socket);
-    busy = false;
+    busy.store(false);
 }
 
 //Main loop
@@ -254,15 +250,16 @@ int main() {
         char buffer[1024] = {0};
         int valread = read(new_socket, buffer, 1024);
 
-        if (busy) {
-            send(new_socket, "busy", strlen("busy"), 0);
+        double lat, lon, alt;
+        if (sscanf(buffer, "%lf,%lf,%lf", &lat, &lon, &alt) != 3) {
+            send(new_socket, "error", strlen("error"), 0);
             close(new_socket);
             continue;
         }
 
-        double lat, lon, alt;
-        if (sscanf(buffer, "%lf,%lf,%lf", &lat, &lon, &alt) != 3) {
-            send(new_socket, "error", strlen("error"), 0);
+        bool expected = false;
+        if (!busy.compare_exchange_strong(expected, true)) {
+            send(new_socket, "busy", strlen("busy"), 0);
             close(new_socket);
             continue;
         }
