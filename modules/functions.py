@@ -141,6 +141,14 @@ def calculate_heading(lat1, lon1, lat2, lon2):
     x = math.cos(lat1_rad) * math.sin(lat2_rad) - math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(lon2_rad - lon1_rad)
     return -math.degrees(math.atan2(y, x)) 
 
+def calculate_bearing(lat1, lon1, lat2, lon2):
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    delta_lon_rad = math.radians(lon2 - lon1)
+    y = math.sin(delta_lon_rad) * math.cos(lat2_rad)
+    x = math.cos(lat1_rad) * math.sin(lat2_rad) - math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(delta_lon_rad)
+    return (math.degrees(math.atan2(y, x)) + 360) % 360 
+
 def clean_string(string):
     return re.sub(r"[\/\\\.,:]", " ", string)
 

@@ -51,11 +51,13 @@ PLANE_GRAPH_HISTORY_SECONDS = 30 * 60
 GRAPH_SAMPLE_INTERVAL = 60
 PLANE_ALTITUDE_SAMPLE_INTERVAL = 0
 PLANE_HIT_SAMPLE_INTERVAL = 60
+DIRECTIONAL_HISTORY_SECONDS = 24 * 60 * 60
+DIRECTIONAL_SECTOR_COUNT = 36
 TOP_GRAPH_HISTORY_DIR = "stats_history"
-
 #Rolling graph data
 active_count_history = deque()
 total_seen_history = deque()
+directional_hit_history = deque()
 
 #Activity spectrogram state
 ACTIVITY_SPECTRUM_SECONDS = 120
@@ -81,6 +83,85 @@ def append_sample(history, value, sample_interval, now=None):
         history[-1] = (bucket_time, value)
     else:
         history.append((bucket_time, value))
+
+
+
+def append_directional_hit(history, bearing_deg, sample_interval, sector_count, now=None):
+    now = now or time.time()
+    sector_width = 360.0 / max(1, sector_count)
+    bucket_time = int(now // sample_interval) * sample_interval if sample_interval > 0 else now
+    sector_index = int((bearing_deg % 360) // sector_width) % sector_count
+
+    if history and history[-1][0] == bucket_time:
+        counts = history[-1][1]
+    else:
+        counts = [0] * sector_count
+        history.append((bucket_time, counts))
+
+    counts[sector_index] += 1
+
+
+def aggregate_directional_hits(history, sector_count, now=None, time_window_seconds=DIRECTIONAL_HISTORY_SECONDS):
+    now = now or time.time()
+    cutoff = now - time_window_seconds
+    totals = [0] * sector_count
+
+    for timestamp, counts in history:
+        if timestamp < cutoff:
+            continue
+        for index, count in enumerate(counts[:sector_count]):
+            totals[index] += count
+
+    return totals
+
+
+def draw_polar_coverage_plot(surface, rect, history, now=None, time_window_seconds=DIRECTIONAL_HISTORY_SECONDS, sector_count=DIRECTIONAL_SECTOR_COUNT):
+    pygame.draw.rect(surface, (100, 100, 100), rect, 1)
+    pygame.draw.rect(surface, (15, 15, 15), rect.inflate(-2, -2), 0)
+
+    inner_margin = 12
+    plot_rect = rect.inflate(-(inner_margin * 2), -(inner_margin * 2))
+    if plot_rect.width <= 10 or plot_rect.height <= 10:
+        return
+
+    center_x, center_y = plot_rect.center
+    max_radius = max(8, min(plot_rect.width, plot_rect.height) // 2 - 2)
+
+    for radius_ratio in (0.25, 0.5, 0.75, 1.0):
+        pygame.draw.circle(surface, (40, 40, 40), (center_x, center_y), max(1, int(max_radius * radius_ratio)), 1)
+
+    for angle_deg in (0, 45, 90, 135):
+        angle_rad = math.radians(angle_deg)
+        dx = math.sin(angle_rad) * max_radius
+        dy = math.cos(angle_rad) * max_radius
+        pygame.draw.line(surface, (50, 50, 50), (center_x - int(dx), center_y + int(dy)), (center_x + int(dx), center_y - int(dy)), 1)
+
+    totals = aggregate_directional_hits(history, sector_count, now, time_window_seconds)
+    peak = max(totals, default=0)
+
+    if peak > 0:
+        sector_width = 360.0 / max(1, sector_count)
+        points = []
+        for index, count in enumerate(totals):
+            angle_deg = (index * sector_width) + (sector_width / 2)
+            radius = (count / peak) * max_radius
+            angle_rad = math.radians(angle_deg)
+            x = center_x + math.sin(angle_rad) * radius
+            y = center_y - math.cos(angle_rad) * radius
+            points.append((int(round(x)), int(round(y))))
+
+        if len(points) >= 3:
+            pygame.draw.lines(surface, (0, 255, 255), True, points, 2)
+        for point in points:
+            pygame.draw.circle(surface, (255, 255, 0), point, 2)
+    else:
+        draw_text.center(surface, "NO DATA", text_font3, (120, 120, 120), center_x, center_y - 5)
+
+    draw_text.center(surface, "N", graph_time_font, (180, 180, 180), center_x, rect.top + 8)
+    draw_text.center(surface, "S", graph_time_font, (180, 180, 180), center_x, rect.bottom - 9)
+    draw_text.center(surface, "E", graph_time_font, (180, 180, 180), rect.right - 9, center_y)
+    draw_text.center(surface, "W", graph_time_font, (180, 180, 180), rect.left + 9, center_y)
+
 
 def get_top_graph_history_path(now=None):
     now = datetime.fromtimestamp(now or time.time())
@@ -675,7 +756,9 @@ def adsb_processing_thread():
                         plane_data["altitude_history"] = cached.get("altitude_history", deque())
                         plane_data["hit_history"] = cached.get("hit_history", deque())
                         plane_data["last_hit_bucket"] = cached.get("last_hit_bucket")
+                        plane_data["last_hit_bucket"] = cached.get("last_hit_bucket")
                         plane_data["last_hit_count"] = cached.get("last_hit_count", 0)
+                        plane_data["total_hit_count"] = cached.get("total_hit_count", 0)
                     else:
                         plane_data["manufacturer"] = "-"
                         plane_data["registration"] = "-"
@@ -687,13 +770,15 @@ def adsb_processing_thread():
                         plane_data["hit_history"] = deque()
                         plane_data["last_hit_bucket"] = None
                         plane_data["last_hit_count"] = 0
-                    
+                        plane_data["total_hit_count"] = 0
                     plane_data["last_lat"] = float(plane_data["lat"])
                     plane_data["last_lon"] = float(plane_data["lon"])
                     plane_data["last_update_time"] = time.time()
                     current_timestamp = plane_data.get("spotted_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                     current_epoch = time.time()
-                    
+                    bearing = functions.calculate_bearing(_config['myLat'], _config['myLon'], plane_data["last_lat"], plane_data["last_lon"])
+                    append_directional_hit(directional_hit_history, bearing, PLANE_HIT_SAMPLE_INTERVAL, DIRECTIONAL_SECTOR_COUNT, current_epoch)
+                    prune_history(directional_hit_history, DIRECTIONAL_HISTORY_SECONDS, current_epoch)
                     #Build location_history for ALL planes (not just ones with API data)
                     if plane_data["lat"] != "-" and plane_data["lon"] != "-":
                         plane_data["location_history"][current_timestamp] = [float(plane_data["lat"]), float(plane_data["lon"])]
@@ -717,7 +802,7 @@ def adsb_processing_thread():
                     else:
                         plane_data["last_hit_bucket"] = hit_bucket
                         plane_data["last_hit_count"] = 1
-                        plane_data["hit_history"].append((hit_bucket, 1))
+                    plane_data["total_hit_count"] = plane_data.get("total_hit_count", 0) + 1
                     prune_history(plane_data["hit_history"], PLANE_GRAPH_HISTORY_SECONDS, current_epoch)
                     
                     active_planes[icao] = plane_data
@@ -1005,12 +1090,14 @@ def main():
                     functions.save_config(_config)
                     add_message(f"Switched to {'offline' if offline else 'online'} mode")
 
-                elif off_button_rect.collidepoint(mouse_x, mouse_y):
+                elif future_button_rect.collidepoint(mouse_x, mouse_y) or off_button_rect.collidepoint(mouse_x, mouse_y):
+                    if future_button_rect.collidepoint(mouse_x, mouse_y):
+                        add_message("Restarting script")
+                        functions.restart_script()
+                        return
                     tracker_running = False
                     pygame.quit()
                     exit()
-
-                #Plane Selection
                 clicked_plane = None
                 with data_lock:
                     for icao, rect in plane_rects.items():
@@ -1305,7 +1392,8 @@ def main():
             stats = functions.get_stats()
             total_seen = stats.get('total', 0)
 
-        persist_top_graph_sample(displayed_count, total_seen, current_time)
+        if displayed_count > 0 or (current_time - start_time) >= GRAPH_SAMPLE_INTERVAL:
+            persist_top_graph_sample(displayed_count, total_seen, current_time)
 
         active_peak = max((sample[1] for sample in active_count_history), default=0)
         active_y_max = max(10, ((active_peak + 10 + 9) // 10) * 10)
@@ -1367,7 +1455,7 @@ def main():
             spd = p_data.get('speed', '-')
             lat = p_data.get('last_lat', '-')
             lon = p_data.get('last_lon', '-')
-            track = p_data.get('track', '-')
+            total_hits = p_data.get("total_hit_count", 0)
 
             
             
@@ -1426,11 +1514,11 @@ def main():
             else:
                 draw_text.normal(window, f"LON: N/A", stat_font, (200, 200, 200), rx, stat_y + spacing*2)
             
-            #Row 4 Hdg / Dist
-            if track != '-':
-                draw_text.normal(window, f"HDG: {rnd(track, 0)}deg", stat_font, (200, 200, 200), lx, stat_y + spacing*3)
-            else:                
-                draw_text.normal(window, f"HDG: N/A", stat_font, (200, 200, 200), lx, stat_y + spacing*3)
+            #Row 4 Hits / Dist
+            draw_text.normal(window, f"HITS: {int(total_hits)}", stat_font, (200, 200, 200), lx, stat_y + spacing*3)
+            
+            
+            
             
             dist_km = p_data.get('distance', '-')
             dist_nm = dist_km
@@ -1453,6 +1541,12 @@ def main():
         pygame.draw.rect(window, (20, 20, 20), (SIDEBAR_X+5, logs_y, (SIDEBAR_WIDTH / 2) - 5, logs_h), 0)
         pygame.draw.rect(window, (100, 100, 100), (SIDEBAR_X+5, logs_y, (SIDEBAR_WIDTH / 2) - 5, logs_h), 1)
 
+        #Polar plot
+        polar_plot_rect = pygame.Rect(SIDEBAR_X + (SIDEBAR_WIDTH // 2) + 200, logs_y, 205, 205)
+        with data_lock:
+            prune_history(directional_hit_history, DIRECTIONAL_HISTORY_SECONDS, current_time)
+            directional_plot_history = [(timestamp, counts.copy()) for timestamp, counts in directional_hit_history]
+        draw_polar_coverage_plot(window, polar_plot_rect, directional_plot_history, current_time)
         #FILTERS
         draw_altitude_filter(window, filter_panel_rect, filter_checkbox_rect, slider_track_rect, filter_slider_handle_rect)
         
