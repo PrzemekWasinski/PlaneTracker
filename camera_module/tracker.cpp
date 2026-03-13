@@ -9,6 +9,11 @@
 #include <cstring>
 #include <thread>
 #include <atomic>
+#include <chrono>
+#include <sstream>
+#include <iomanip>
+#include <sys/statvfs.h>
+#include <sys/sysinfo.h>
 
 //SERVO PINS
 const int PAN_PIN  = 18;
@@ -151,6 +156,73 @@ ServoInputs computeServoInputs(double bearing, double elevDeg, double homeBearin
     return r;
 }
 
+double readCpuUsagePercent() {
+    static unsigned long long prevIdle = 0;
+    static unsigned long long prevTotal = 0;
+
+    std::ifstream statFile("/proc/stat");
+    std::string cpu;
+    unsigned long long user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0, steal = 0;
+    if (!(statFile >> cpu >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal)) {
+        return 0.0;
+    }
+
+    unsigned long long idleAll = idle + iowait;
+    unsigned long long total = user + nice + system + idle + iowait + irq + softirq + steal;
+    if (prevTotal == 0 || total <= prevTotal) {
+        prevIdle = idleAll;
+        prevTotal = total;
+        return 0.0;
+    }
+
+    unsigned long long totalDiff = total - prevTotal;
+    unsigned long long idleDiff = idleAll - prevIdle;
+    prevIdle = idleAll;
+    prevTotal = total;
+    if (totalDiff == 0) {
+        return 0.0;
+    }
+    return 100.0 * (1.0 - (double)idleDiff / (double)totalDiff);
+}
+
+double readTemperatureC() {
+    std::ifstream tempFile("/sys/class/thermal/thermal_zone0/temp");
+    double milliC = 0.0;
+    if (!(tempFile >> milliC)) {
+        return 0.0;
+    }
+    return milliC / 1000.0;
+}
+
+double readRamPercent() {
+    struct sysinfo info;
+    if (sysinfo(&info) != 0 || info.totalram == 0) {
+        return 0.0;
+    }
+    double total = (double)info.totalram * info.mem_unit;
+    double available = (double)info.freeram * info.mem_unit;
+    return 100.0 * (1.0 - (available / total));
+}
+
+double readDiskFreeGb() {
+    struct statvfs fs;
+    if (statvfs("/", &fs) != 0) {
+        return 0.0;
+    }
+    unsigned long long freeBytes = (unsigned long long)fs.f_bavail * (unsigned long long)fs.f_frsize;
+    return (double)freeBytes / (1024.0 * 1024.0 * 1024.0);
+}
+
+std::string buildStatsResponse() {
+    std::ostringstream response;
+    response << std::fixed << std::setprecision(1)
+             << readTemperatureC() << ","
+             << readRamPercent() << ","
+             << readCpuUsagePercent() << ","
+             << readDiskFreeGb();
+    return response.str();
+}
+
 //SERVO DRIVER
 void setServo(int pin, int servoInput) {
     int pulseUs = PULSE_MIN_US + (int)std::round(
@@ -167,12 +239,16 @@ void stopServos() {
 
 //Tracking function
 void trackPlane(double lat, double lon, double alt, HomeConfig& cfg, int client_socket) {
+    std::cout << "Track request: lat=" << lat << ", lon=" << lon << ", alt_m=" << alt << "\n";
     // use local parameters rather than modifying the const test targets
     double bearing = haversineBearing(cfg.lat, cfg.lon, lat, lon);
     double distance = haversineDistance(cfg.lat, cfg.lon, lat, lon);
     double elev = elevationAngle(distance, cfg.elevation, alt);
 
     ServoInputs s = computeServoInputs(bearing, elev, cfg.bearing, cfg.pan_clockwise);
+
+    std::cout << "Computed: bearing=" << bearing << ", distance_m=" << distance << ", elev_deg=" << elev
+              << ", pan=" << s.pan << ", tilt=" << s.tilt << ", valid=" << (s.valid ? "true" : "false") << "\n";
 
     if (!s.valid) {
         send(client_socket, "error", strlen("error"), 0);
@@ -193,6 +269,8 @@ void trackPlane(double lat, double lon, double alt, HomeConfig& cfg, int client_
 
     setServo(PAN_PIN, s.pan);
     setServo(TILT_PIN, s.tilt);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(750));
 
     stopServos();
     gpioTerminate();
@@ -249,9 +327,23 @@ int main() {
 
         char buffer[1024] = {0};
         int valread = read(new_socket, buffer, 1024);
+        if (valread <= 0) {
+            close(new_socket);
+            continue;
+        }
+
+        std::string request = trim(std::string(buffer, valread));
+        if (request == "stats") {
+            std::string stats = buildStatsResponse();
+            send(new_socket, stats.c_str(), stats.size(), 0);
+            close(new_socket);
+            continue;
+        }
+
+        std::cout << "Incoming request: " << request << "\n";
 
         double lat, lon, alt;
-        if (sscanf(buffer, "%lf,%lf,%lf", &lat, &lon, &alt) != 3) {
+        if (sscanf(request.c_str(), "%lf,%lf,%lf", &lat, &lon, &alt) != 3) {
             send(new_socket, "error", strlen("error"), 0);
             close(new_socket);
             continue;

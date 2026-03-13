@@ -1,4 +1,28 @@
-#UK Airports example
+# Major UK airports used for radar map labels.
 airports_uk = {
-    "Heathrow": {"airport_name": "Heathrow Airport", "lat": 51.4700, "lon": -0.4543}
+    "Heathrow": {"airport_name": "Heathrow", "lat": 51.4700, "lon": -0.4543},
+    "Gatwick": {"airport_name": "Gatwick", "lat": 51.1537, "lon": -0.1821},
+    "Stansted": {"airport_name": "Stansted", "lat": 51.8850, "lon": 0.2350},
+    "Luton": {"airport_name": "Luton", "lat": 51.8747, "lon": -0.3683},
+    "London City": {"airport_name": "London City", "lat": 51.5053, "lon": 0.0553},
+    "Birmingham": {"airport_name": "Birmingham", "lat": 52.4539, "lon": -1.7480},
+    "Manchester": {"airport_name": "Manchester", "lat": 53.3650, "lon": -2.2728},
+    "Liverpool": {"airport_name": "Liverpool", "lat": 53.3336, "lon": -2.8497},
+    "Leeds Bradford": {"airport_name": "Leeds Bradford", "lat": 53.8659, "lon": -1.6606},
+    "Newcastle": {"airport_name": "Newcastle", "lat": 55.0375, "lon": -1.6917},
+    "Bristol": {"airport_name": "Bristol", "lat": 51.3827, "lon": -2.7191},
+    "East Midlands": {"airport_name": "East Midlands", "lat": 52.8311, "lon": -1.3281},
+    "Southampton": {"airport_name": "Southampton", "lat": 50.9503, "lon": -1.3568},
+    "Bournemouth": {"airport_name": "Bournemouth", "lat": 50.7800, "lon": -1.8425},
+    "Cardiff": {"airport_name": "Cardiff", "lat": 51.3967, "lon": -3.3433},
+    "Exeter": {"airport_name": "Exeter", "lat": 50.7344, "lon": -3.4139},
+    "Norwich": {"airport_name": "Norwich", "lat": 52.6758, "lon": 1.2828},
+    "Belfast Intl": {"airport_name": "Belfast Intl", "lat": 54.6575, "lon": -6.2158},
+    "Belfast City": {"airport_name": "Belfast City", "lat": 54.6181, "lon": -5.8725},
+    "Edinburgh": {"airport_name": "Edinburgh", "lat": 55.9500, "lon": -3.3725},
+    "Glasgow": {"airport_name": "Glasgow", "lat": 55.8719, "lon": -4.4331},
+    "Aberdeen": {"airport_name": "Aberdeen", "lat": 57.2019, "lon": -2.1978},
+    "Inverness": {"airport_name": "Inverness", "lat": 57.5425, "lon": -4.0475},
+    "Prestwick": {"airport_name": "Prestwick", "lat": 55.5094, "lon": -4.5867},
+    "Teesside": {"airport_name": "Teesside", "lat": 54.5092, "lon": -1.4294},
 }

@@ -16,31 +16,72 @@ def plane_matches_altitude_filter(plane_data, altitude_filter_threshold, altitud
     return altitude_value <= altitude_filter_threshold
 
 
-def draw_altitude_filter(surface, panel_rect, checkbox_rect, slider_track_rect, slider_handle_rect, altitude_filter_threshold, altitude_filter_above, distance_unit, distance_unit_rects, draw_text_module, stat_font, graph_time_font, text_font, pygame_module):
+def plane_matches_distance_filter(plane_data, distance_filter_threshold_km, distance_filter_outside):
+    if distance_filter_threshold_km <= 0:
+        return True
+
+    distance_value = plane_data.get('distance')
+    try:
+        distance_value = float(distance_value)
+    except (TypeError, ValueError):
+        return False
+
+    if distance_filter_outside:
+        return distance_value >= distance_filter_threshold_km
+    return distance_value <= distance_filter_threshold_km
+
+
+def draw_altitude_filter(surface, panel_rect, altitude_checkbox_rect, altitude_slider_track_rect, altitude_slider_handle_rect, altitude_filter_threshold, altitude_filter_above, distance_checkbox_rect, distance_slider_track_rect, distance_slider_handle_rect, distance_filter_threshold_km, distance_filter_outside, distance_unit, distance_unit_rects, draw_text_module, stat_font, graph_time_font, text_font, pygame_module):
     pygame_module.draw.rect(surface, (100, 100, 100), panel_rect, 1)
 
-    pygame_module.draw.rect(surface, (20, 20, 20), checkbox_rect, 0)
-    pygame_module.draw.rect(surface, (160, 160, 160), checkbox_rect, 1)
+    pygame_module.draw.rect(surface, (20, 20, 20), altitude_checkbox_rect, 0)
+    pygame_module.draw.rect(surface, (160, 160, 160), altitude_checkbox_rect, 1)
     if altitude_filter_above:
-        pygame_module.draw.line(surface, (0, 255, 0), (checkbox_rect.left + 3, checkbox_rect.centery), (checkbox_rect.centerx, checkbox_rect.bottom - 4), 2)
-        pygame_module.draw.line(surface, (0, 255, 0), (checkbox_rect.centerx, checkbox_rect.bottom - 4), (checkbox_rect.right - 3, checkbox_rect.top + 3), 2)
+        pygame_module.draw.line(surface, (0, 255, 0), (altitude_checkbox_rect.left + 3, altitude_checkbox_rect.centery), (altitude_checkbox_rect.centerx, altitude_checkbox_rect.bottom - 4), 2)
+        pygame_module.draw.line(surface, (0, 255, 0), (altitude_checkbox_rect.centerx, altitude_checkbox_rect.bottom - 4), (altitude_checkbox_rect.right - 3, altitude_checkbox_rect.top + 3), 2)
 
-    mode_text = 'ABOVE' if altitude_filter_above else 'BELOW'
-    draw_text_module.normal(surface, mode_text, text_font, (255, 255, 255), checkbox_rect.right + 8, checkbox_rect.top - 1)
-    draw_text_module.normal(surface, f"{int(altitude_filter_threshold)} FT", stat_font, (255, 255, 255), panel_rect.left + 8, checkbox_rect.bottom + 4)
+    draw_text_module.normal(surface, 'ABOVE', text_font, (255, 255, 255), altitude_checkbox_rect.right + 8, altitude_checkbox_rect.top - 1)
+    draw_text_module.normal(surface, f"{int(altitude_filter_threshold)} FT", stat_font, (255, 255, 255), panel_rect.left + 8, altitude_checkbox_rect.bottom + 4)
 
-    pygame_module.draw.rect(surface, (35, 35, 35), slider_track_rect, 0)
-    pygame_module.draw.rect(surface, (100, 100, 100), slider_track_rect, 1)
-    pygame_module.draw.line(surface, (0, 255, 255), (slider_track_rect.centerx, slider_track_rect.top + 4), (slider_track_rect.centerx, slider_track_rect.bottom - 4), 3)
+    pygame_module.draw.rect(surface, (35, 35, 35), altitude_slider_track_rect, 0)
+    pygame_module.draw.rect(surface, (100, 100, 100), altitude_slider_track_rect, 1)
+    pygame_module.draw.line(surface, (0, 255, 255), (altitude_slider_track_rect.centerx, altitude_slider_track_rect.top + 4), (altitude_slider_track_rect.centerx, altitude_slider_track_rect.bottom - 4), 3)
 
     for alt_mark in [0, 10000, 20000, 30000, 40000, 50000]:
         tick_ratio = 1.0 - (alt_mark / 50000.0)
-        tick_y = slider_track_rect.top + int(tick_ratio * slider_track_rect.height)
-        pygame_module.draw.line(surface, (120, 120, 120), (slider_track_rect.left, tick_y), (slider_track_rect.left + 8, tick_y), 1)
-        draw_text_module.normal(surface, f"{alt_mark // 1000}", graph_time_font, (180, 180, 180), slider_track_rect.right + 6, tick_y - 4)
+        tick_y = altitude_slider_track_rect.top + int(tick_ratio * altitude_slider_track_rect.height)
+        pygame_module.draw.line(surface, (120, 120, 120), (altitude_slider_track_rect.left, tick_y), (altitude_slider_track_rect.left + 8, tick_y), 1)
+        draw_text_module.normal(surface, f"{alt_mark // 1000}", graph_time_font, (180, 180, 180), altitude_slider_track_rect.right + 6, tick_y - 4)
 
-    pygame_module.draw.rect(surface, (255, 255, 0), slider_handle_rect, 0)
-    pygame_module.draw.rect(surface, (255, 255, 255), slider_handle_rect, 1)
+    pygame_module.draw.rect(surface, (255, 255, 0), altitude_slider_handle_rect, 0)
+    pygame_module.draw.rect(surface, (255, 255, 255), altitude_slider_handle_rect, 1)
+
+    pygame_module.draw.rect(surface, (20, 20, 20), distance_checkbox_rect, 0)
+    pygame_module.draw.rect(surface, (160, 160, 160), distance_checkbox_rect, 1)
+    if distance_filter_outside:
+        pygame_module.draw.line(surface, (0, 255, 0), (distance_checkbox_rect.left + 3, distance_checkbox_rect.centery), (distance_checkbox_rect.centerx, distance_checkbox_rect.bottom - 4), 2)
+        pygame_module.draw.line(surface, (0, 255, 0), (distance_checkbox_rect.centerx, distance_checkbox_rect.bottom - 4), (distance_checkbox_rect.right - 3, distance_checkbox_rect.top + 3), 2)
+
+    unit_suffix = distance_unit.lower()
+    unit_divisor = 1.852 if distance_unit == 'NM' else (1.609344 if distance_unit == 'MI' else 1.0)
+    displayed_distance = distance_filter_threshold_km / unit_divisor
+    draw_text_module.normal(surface, 'OUTSIDE', text_font, (255, 255, 255), distance_checkbox_rect.right + 8, distance_checkbox_rect.top - 1)
+    draw_text_module.normal(surface, f"{round(displayed_distance, 1)} {unit_suffix}", stat_font, (255, 255, 255), distance_slider_track_rect.left - 4, distance_checkbox_rect.bottom + 4)
+
+    pygame_module.draw.rect(surface, (35, 35, 35), distance_slider_track_rect, 0)
+    pygame_module.draw.rect(surface, (100, 100, 100), distance_slider_track_rect, 1)
+    pygame_module.draw.line(surface, (255, 140, 0), (distance_slider_track_rect.centerx, distance_slider_track_rect.top + 4), (distance_slider_track_rect.centerx, distance_slider_track_rect.bottom - 4), 3)
+
+    for mark_index in range(6):
+        distance_mark_km = (1000.0 / 5.0) * mark_index
+        tick_ratio = 1.0 - (distance_mark_km / 1000.0)
+        tick_y = distance_slider_track_rect.top + int(tick_ratio * distance_slider_track_rect.height)
+        display_mark = distance_mark_km / unit_divisor
+        pygame_module.draw.line(surface, (120, 120, 120), (distance_slider_track_rect.left, tick_y), (distance_slider_track_rect.left + 8, tick_y), 1)
+        draw_text_module.normal(surface, f"{int(round(display_mark))}", graph_time_font, (180, 180, 180), distance_slider_track_rect.right + 6, tick_y - 4)
+
+    pygame_module.draw.rect(surface, (255, 200, 0), distance_slider_handle_rect, 0)
+    pygame_module.draw.rect(surface, (255, 255, 255), distance_slider_handle_rect, 1)
 
     for unit_key, rect in distance_unit_rects.items():
         pygame_module.draw.rect(surface, (20, 20, 20), rect, 0)
@@ -51,7 +92,7 @@ def draw_altitude_filter(surface, panel_rect, checkbox_rect, slider_track_rect, 
         draw_text_module.normal(surface, unit_key, text_font, (255, 255, 255), rect.right + 6, rect.top - 1)
 
 
-def draw_line_graph(surface, rect, samples, y_max, draw_text_module, text_font, pygame_module, now=None, time_window_seconds=30 * 60, title=None, border_color=(100, 100, 100)):
+def draw_line_graph(surface, rect, samples, y_max, draw_text_module, text_font, pygame_module, display_y_max, now=None, time_window_seconds=30 * 60, title=None, border_color=(100, 100, 100)):
     pygame_module.draw.rect(surface, border_color, rect, 1)
 
     inner_rect = rect.inflate(-12, -12)
@@ -97,7 +138,7 @@ def draw_line_graph(surface, rect, samples, y_max, draw_text_module, text_font, 
 
     surface.set_clip(old_clip)
 
-    y_max_img = text_font.render(str(y_max), True, (255, 255, 255))
+    y_max_img = text_font.render(str(display_y_max), True, (255, 255, 255))
     y_max_rect = y_max_img.get_rect(topleft=(rect.left + 6, rect.top + 3))
     surface.blit(y_max_img, y_max_rect)
 
@@ -162,19 +203,35 @@ def draw_polar_coverage_plot(surface, rect, history, draw_text_module, text_font
 
 
 
-def draw_filter_action_buttons(surface, heatmap_button_rect, hide_planes_button_rect, reset_filters_button_rect, radar_heatmap_enabled, hide_planes_mode, draw_text_module, text_font, pygame_module):
+def draw_filter_action_buttons(surface, heatmap_button_rect, hide_planes_button_rect, reset_filters_button_rect, radar_heatmap_enabled, hide_planes_mode, button_icons, *args):
+    pygame_module = None
+    for arg in reversed(args):
+        if hasattr(arg, 'transform') and hasattr(arg, 'draw'):
+            pygame_module = arg
+            break
+    if pygame_module is None:
+        import pygame as pygame_module
+
+    heatmap_icon = button_icons['heatmap_off'] if radar_heatmap_enabled else button_icons['heatmap_on']
+    if hide_planes_mode == 0:
+        plane_icon = button_icons['plane_and_text']
+    elif hide_planes_mode == 1:
+        plane_icon = button_icons['plane_only']
+    else:
+        plane_icon = button_icons['hide_plane']
+
     buttons = [
-        (heatmap_button_rect, 'HT', radar_heatmap_enabled),
-        (hide_planes_button_rect, 'HP', hide_planes_mode != 0),
-        (reset_filters_button_rect, 'RS', False),
+        (heatmap_button_rect, heatmap_icon, False),
+        (hide_planes_button_rect, plane_icon, True),
+        (reset_filters_button_rect, button_icons['clear_filters'], True),
     ]
 
-    for rect, label, is_active in buttons:
-        fill = (0, 90, 90) if is_active else (25, 25, 25)
-        border = (0, 255, 255) if is_active else (100, 100, 100)
-        pygame_module.draw.rect(surface, fill, rect, 0)
-        pygame_module.draw.rect(surface, border, rect, 1)
-        draw_text_module.center(surface, label, text_font, (255, 255, 255), rect.centerx, rect.centery - 4)
+    for rect, icon, use_white_background in buttons:
+        if use_white_background:
+            pygame_module.draw.rect(surface, (255, 255, 255), rect, 0)
+        if icon is not None:
+            scaled_icon = pygame_module.transform.smoothscale(icon, (rect.width, rect.height))
+            surface.blit(scaled_icon, rect.topleft)
 
 
 def draw_radar_heatmap(surface, radar_rect, hit_points, pygame_module):

@@ -6,6 +6,18 @@ from time import localtime, strftime
 import requests
 
 from .core_utils import clean_string
+from collections import deque
+
+
+def make_json_safe(value):
+    if isinstance(value, deque):
+        return [make_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {key: make_json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [make_json_safe(item) for item in value]
+    return value
+
 
 
 def connect(server):
@@ -120,7 +132,7 @@ def upload_to_firebase(plane_data):
         firebase_data = {}
         for key in plane_data:
             if key not in ['location_history', 'last_update_time', 'last_lat', 'last_lon', 'last_api_error']:
-                firebase_data[key] = plane_data[key]
+                firebase_data[key] = make_json_safe(plane_data[key])
 
         min_str = strftime('%M', localtime())
         hour = strftime('%H', localtime())
