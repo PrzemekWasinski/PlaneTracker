@@ -31,7 +31,27 @@ def plane_matches_distance_filter(plane_data, distance_filter_threshold_km, dist
     return distance_value <= distance_filter_threshold_km
 
 
-def draw_altitude_filter(surface, panel_rect, altitude_checkbox_rect, altitude_slider_track_rect, altitude_slider_handle_rect, altitude_filter_threshold, altitude_filter_above, distance_checkbox_rect, distance_slider_track_rect, distance_slider_handle_rect, distance_filter_threshold_km, distance_filter_outside, distance_unit, distance_unit_rects, draw_text_module, stat_font, graph_time_font, text_font, pygame_module):
+def draw_step_button(surface, rect, direction, pygame_module):
+    pygame_module.draw.rect(surface, (20, 20, 20), rect, 0)
+    pygame_module.draw.rect(surface, (160, 160, 160), rect, 1)
+
+    if direction == 'up':
+        points = [
+            (rect.centerx, rect.top + 4),
+            (rect.left + 4, rect.bottom - 4),
+            (rect.right - 4, rect.bottom - 4),
+        ]
+    else:
+        points = [
+            (rect.left + 4, rect.top + 4),
+            (rect.right - 4, rect.top + 4),
+            (rect.centerx, rect.bottom - 4),
+        ]
+    pygame_module.draw.polygon(surface, (255, 255, 255), points)
+
+
+
+def draw_altitude_filter(surface, panel_rect, altitude_checkbox_rect, altitude_slider_track_rect, altitude_slider_handle_rect, altitude_up_button_rect, altitude_down_button_rect, altitude_filter_threshold, altitude_filter_above, distance_checkbox_rect, distance_slider_track_rect, distance_slider_handle_rect, distance_up_button_rect, distance_down_button_rect, distance_filter_threshold_km, distance_filter_outside, distance_unit, distance_unit_rects, draw_text_module, stat_font, graph_time_font, text_font, pygame_module):
     pygame_module.draw.rect(surface, (100, 100, 100), panel_rect, 1)
 
     pygame_module.draw.rect(surface, (20, 20, 20), altitude_checkbox_rect, 0)
@@ -55,6 +75,8 @@ def draw_altitude_filter(surface, panel_rect, altitude_checkbox_rect, altitude_s
 
     pygame_module.draw.rect(surface, (255, 255, 0), altitude_slider_handle_rect, 0)
     pygame_module.draw.rect(surface, (255, 255, 255), altitude_slider_handle_rect, 1)
+    draw_step_button(surface, altitude_up_button_rect, 'up', pygame_module)
+    draw_step_button(surface, altitude_down_button_rect, 'down', pygame_module)
 
     pygame_module.draw.rect(surface, (20, 20, 20), distance_checkbox_rect, 0)
     pygame_module.draw.rect(surface, (160, 160, 160), distance_checkbox_rect, 1)
@@ -70,7 +92,7 @@ def draw_altitude_filter(surface, panel_rect, altitude_checkbox_rect, altitude_s
 
     pygame_module.draw.rect(surface, (35, 35, 35), distance_slider_track_rect, 0)
     pygame_module.draw.rect(surface, (100, 100, 100), distance_slider_track_rect, 1)
-    pygame_module.draw.line(surface, (255, 140, 0), (distance_slider_track_rect.centerx, distance_slider_track_rect.top + 4), (distance_slider_track_rect.centerx, distance_slider_track_rect.bottom - 4), 3)
+    pygame_module.draw.line(surface, (0, 255, 255), (distance_slider_track_rect.centerx, distance_slider_track_rect.top + 4), (distance_slider_track_rect.centerx, distance_slider_track_rect.bottom - 4), 3)
 
     for mark_index in range(6):
         distance_mark_km = (1000.0 / 5.0) * mark_index
@@ -80,8 +102,10 @@ def draw_altitude_filter(surface, panel_rect, altitude_checkbox_rect, altitude_s
         pygame_module.draw.line(surface, (120, 120, 120), (distance_slider_track_rect.left, tick_y), (distance_slider_track_rect.left + 8, tick_y), 1)
         draw_text_module.normal(surface, f"{int(round(display_mark))}", graph_time_font, (180, 180, 180), distance_slider_track_rect.right + 6, tick_y - 4)
 
-    pygame_module.draw.rect(surface, (255, 200, 0), distance_slider_handle_rect, 0)
+    pygame_module.draw.rect(surface, (255, 255, 0), distance_slider_handle_rect, 0)
     pygame_module.draw.rect(surface, (255, 255, 255), distance_slider_handle_rect, 1)
+    draw_step_button(surface, distance_up_button_rect, 'up', pygame_module)
+    draw_step_button(surface, distance_down_button_rect, 'down', pygame_module)
 
     for unit_key, rect in distance_unit_rects.items():
         pygame_module.draw.rect(surface, (20, 20, 20), rect, 0)

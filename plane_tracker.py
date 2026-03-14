@@ -508,6 +508,23 @@ def format_distance(distance_km, unit, decimals=1):
     return f"{round(converted, decimals)}{suffix}"
 
 
+def convert_distance_to_km(distance_value, unit):
+    value = float(distance_value)
+    if unit == 'NM':
+        return value * 1.852
+    if unit == 'KM':
+        return value
+    return value * 1.609344
+
+
+def clamp_altitude_threshold(value):
+    return int(max(0, min(50000, round(value))))
+
+
+def clamp_distance_threshold(distance_km):
+    return max(0.0, min(1000.0, float(distance_km)))
+
+
 #Start ADSB processing thread
 processing_thread = threading.Thread(target=adsb_processing_thread, daemon=True)
 processing_thread.start()
@@ -568,6 +585,10 @@ def main():
         distance_slider_handle_y = distance_slider_track_rect.top + int(distance_slider_ratio * distance_slider_track_rect.height) - 5
         distance_slider_handle_y = max(distance_slider_track_rect.top - 5, min(distance_slider_track_rect.bottom - 5, distance_slider_handle_y))
         distance_filter_slider_handle_rect = pygame.Rect(distance_slider_track_rect.left - 2, distance_slider_handle_y, distance_slider_track_rect.width + 4, 10)
+        altitude_slider_up_rect = pygame.Rect(slider_track_rect.right + 30, slider_track_rect.top + 6, 18, 14)
+        altitude_slider_down_rect = pygame.Rect(slider_track_rect.right + 30, slider_track_rect.top + 24, 18, 14)
+        distance_slider_up_rect = pygame.Rect(distance_slider_track_rect.right + 30, distance_slider_track_rect.top + 6, 18, 14)
+        distance_slider_down_rect = pygame.Rect(distance_slider_track_rect.right + 30, distance_slider_track_rect.top + 24, 18, 14)
         
         #Restart every 30 minutes
         if current_time - start_time > 1800:
@@ -633,12 +654,10 @@ def main():
             elif event.type == pygame.MOUSEMOTION:
                 if altitude_filter_dragging:
                     clamped_y = max(slider_track_rect.top, min(slider_track_rect.bottom, event.pos[1]))
-                    altitude_filter_threshold = int(round((1.0 - ((clamped_y - slider_track_rect.top) / max(1, slider_track_rect.height))) * 50000))
-                    altitude_filter_threshold = max(0, min(50000, altitude_filter_threshold))
+                    altitude_filter_threshold = clamp_altitude_threshold((1.0 - ((clamped_y - slider_track_rect.top) / max(1, slider_track_rect.height))) * 50000)
                 if distance_filter_dragging:
                     clamped_y = max(distance_slider_track_rect.top, min(distance_slider_track_rect.bottom, event.pos[1]))
-                    distance_filter_threshold_km = (1.0 - ((clamped_y - distance_slider_track_rect.top) / max(1, distance_slider_track_rect.height))) * 1000.0
-                    distance_filter_threshold_km = max(0.0, min(1000.0, distance_filter_threshold_km))
+                    distance_filter_threshold_km = clamp_distance_threshold((1.0 - ((clamped_y - distance_slider_track_rect.top) / max(1, distance_slider_track_rect.height))) * 1000.0)
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 #Only process left mouse button (button 1), ignore middle/right clicks and scroll buttons
@@ -698,18 +717,33 @@ def main():
                     distance_filter_outside = not distance_filter_outside
                     continue
 
+                if altitude_slider_up_rect.collidepoint(mouse_x, mouse_y):
+                    altitude_filter_threshold = clamp_altitude_threshold(altitude_filter_threshold + 100)
+                    continue
+
+                if altitude_slider_down_rect.collidepoint(mouse_x, mouse_y):
+                    altitude_filter_threshold = clamp_altitude_threshold(altitude_filter_threshold - 100)
+                    continue
+
+                distance_step_km = convert_distance_to_km(10, distance_unit)
+                if distance_slider_up_rect.collidepoint(mouse_x, mouse_y):
+                    distance_filter_threshold_km = clamp_distance_threshold(distance_filter_threshold_km + distance_step_km)
+                    continue
+
+                if distance_slider_down_rect.collidepoint(mouse_x, mouse_y):
+                    distance_filter_threshold_km = clamp_distance_threshold(distance_filter_threshold_km - distance_step_km)
+                    continue
+
                 if slider_track_rect.collidepoint(mouse_x, mouse_y) or filter_slider_handle_rect.collidepoint(mouse_x, mouse_y):
                     altitude_filter_dragging = True
                     clamped_y = max(slider_track_rect.top, min(slider_track_rect.bottom, mouse_y))
-                    altitude_filter_threshold = int(round((1.0 - ((clamped_y - slider_track_rect.top) / max(1, slider_track_rect.height))) * 50000))
-                    altitude_filter_threshold = max(0, min(50000, altitude_filter_threshold))
+                    altitude_filter_threshold = clamp_altitude_threshold((1.0 - ((clamped_y - slider_track_rect.top) / max(1, slider_track_rect.height))) * 50000)
                     continue
 
                 if distance_slider_track_rect.collidepoint(mouse_x, mouse_y) or distance_filter_slider_handle_rect.collidepoint(mouse_x, mouse_y):
                     distance_filter_dragging = True
                     clamped_y = max(distance_slider_track_rect.top, min(distance_slider_track_rect.bottom, mouse_y))
-                    distance_filter_threshold_km = (1.0 - ((clamped_y - distance_slider_track_rect.top) / max(1, distance_slider_track_rect.height))) * 1000.0
-                    distance_filter_threshold_km = max(0.0, min(1000.0, distance_filter_threshold_km))
+                    distance_filter_threshold_km = clamp_distance_threshold((1.0 - ((clamped_y - distance_slider_track_rect.top) / max(1, distance_slider_track_rect.height))) * 1000.0)
                     continue
 
                 if track_plane_button_rect.collidepoint(mouse_x, mouse_y):
@@ -1208,7 +1242,8 @@ def main():
         draw_line_graph(window, altitude_graph_rect, altitude_samples, 50000, draw_text, text_font3, pygame, 50000, current_time, PLANE_GRAPH_HISTORY_SECONDS, "ALTITUDE")
         hits_peak = max((sample[1] for sample in hit_samples), default=0)
         hits_y_max = max(10, ((hits_peak + 10 + 9) // 10) * 10)
-        draw_line_graph(window, hits_graph_rect, hit_samples, hits_y_max, draw_text, text_font3, pygame, p_data.get("total_hit_count", 0), current_time, PLANE_GRAPH_HISTORY_SECONDS, "HITS")
+        selected_total_hits = graph_plane_data.get("total_hit_count", 0) if graph_plane_data else 0
+        draw_line_graph(window, hits_graph_rect, hit_samples, hits_y_max, draw_text, text_font3, pygame, selected_total_hits, current_time, PLANE_GRAPH_HISTORY_SECONDS, "HITS")
         
         if p_data:
             mfg = p_data.get('manufacturer', '-')
@@ -1318,7 +1353,7 @@ def main():
             directional_plot_history = [(timestamp, counts.copy()) for timestamp, counts in directional_hit_history]
         draw_polar_coverage_plot(window, polar_plot_rect, directional_plot_history, draw_text, text_font3, graph_time_font, pygame, current_time, DIRECTIONAL_HISTORY_SECONDS, DIRECTIONAL_SECTOR_COUNT)
         #FILTERS
-        draw_altitude_filter(window, filter_panel_rect, filter_checkbox_rect, slider_track_rect, filter_slider_handle_rect, altitude_filter_threshold, altitude_filter_above, distance_filter_checkbox_rect, distance_slider_track_rect, distance_filter_slider_handle_rect, distance_filter_threshold_km, distance_filter_outside, distance_unit, distance_unit_rects, draw_text, stat_font, graph_time_font, text_font3, pygame)
+        draw_altitude_filter(window, filter_panel_rect, filter_checkbox_rect, slider_track_rect, filter_slider_handle_rect, altitude_slider_up_rect, altitude_slider_down_rect, altitude_filter_threshold, altitude_filter_above, distance_filter_checkbox_rect, distance_slider_track_rect, distance_filter_slider_handle_rect, distance_slider_up_rect, distance_slider_down_rect, distance_filter_threshold_km, distance_filter_outside, distance_unit, distance_unit_rects, draw_text, stat_font, graph_time_font, text_font3, pygame)
         filter_button_icons = {
             'heatmap_on': heatmap_on_icon,
             'heatmap_off': heatmap_off_icon,
