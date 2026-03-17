@@ -1,43 +1,50 @@
-#include <iostream>
-#include <fstream>
-#include <string>
-#include <cmath>
-#include <pigpio.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <unistd.h>
-#include <cstring>
-#include <thread>
 #include <atomic>
 #include <chrono>
-#include <sstream>
+#include <cctype>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
+#include <iostream>
+#include <netinet/in.h>
+#include <pigpio.h>
+#include <sstream>
+#include <string>
+#include <sys/socket.h>
 #include <sys/statvfs.h>
 #include <sys/sysinfo.h>
+#include <thread>
+#include <unistd.h>
+#include <vector>
+
+namespace fs = std::filesystem;
 
 //SERVO PINS
 const int PAN_PIN  = 18;
 const int TILT_PIN = 19;
 
 //SERVO CALIBRATION
-
 const int TILT_INPUT_MIN  = 15; //Max 15 degrees due to physical blockage
 const int TILT_INPUT_MAX  = 270;
-
 const int PWM_FREQ        = 50;
 const int PULSE_MIN_US    = 400;
 const int PULSE_MAX_US    = 2500;
 const int SERVO_INPUT_MAX = 270;
 
+const char* OUTPUT_DIR = "images";
+const int SERVO_SETTLE_MS = 250;
+
 std::atomic<bool> busy(false);
 
-//Load yaml
 struct HomeConfig {
-    double lat          = 0.0;
-    double lon          = 0.0;
-    double elevation    = 0.0;
-    double bearing      = 180.0;  
-    bool   pan_clockwise = false;  
+    double lat           = 0.0;
+    double lon           = 0.0;
+    double elevation     = 0.0;
+    double bearing       = 180.0;
+    bool pan_clockwise   = false;
 };
 
 static std::string trim(const std::string& s) {
@@ -62,10 +69,10 @@ bool loadConfig(const std::string& path, HomeConfig& cfg) {
         std::string val = trim(line.substr(colon + 1));
         if (key.empty() || val.empty()) continue;
         try {
-            if      (key == "home_lat")       cfg.lat          = std::stod(val);
-            else if (key == "home_lon")       cfg.lon          = std::stod(val);
-            else if (key == "home_elevation") cfg.elevation    = std::stod(val);
-            else if (key == "home_bearing")   cfg.bearing      = std::stod(val);
+            if      (key == "home_lat")       cfg.lat = std::stod(val);
+            else if (key == "home_lon")       cfg.lon = std::stod(val);
+            else if (key == "home_elevation") cfg.elevation = std::stod(val);
+            else if (key == "home_bearing")   cfg.bearing = std::stod(val);
             else if (key == "pan_clockwise")  cfg.pan_clockwise = (val == "true");
         } catch (...) {
             std::cerr << "WARNING: Could not parse value for key '" << key << "'\n";
@@ -74,7 +81,6 @@ bool loadConfig(const std::string& path, HomeConfig& cfg) {
     return true;
 }
 
-//Motor angle calculation
 const double DEG2RAD = M_PI / 180.0;
 const double RAD2DEG = 180.0 / M_PI;
 const double EARTH_R = 6371000.0;
@@ -102,10 +108,9 @@ double elevationAngle(double distanceM, double homeElevM, double targetElevM) {
     return std::atan2(altDiff, distanceM) * RAD2DEG;
 }
 
-
 struct ServoInputs {
-    int  pan;
-    int  tilt;
+    int pan;
+    int tilt;
     bool valid;
     bool backMode;
 };
@@ -114,8 +119,6 @@ ServoInputs computeServoInputs(double bearing, double elevDeg, double homeBearin
     ServoInputs r = {0, 0, false, false};
 
     bearing = std::fmod(bearing + 360.0, 360.0);
-
-    //If target below horizon (should never happen because planes fly high)
     if (elevDeg < 0.0) return r;
     if (elevDeg > 90.0) elevDeg = 90.0;
 
@@ -126,32 +129,28 @@ ServoInputs computeServoInputs(double bearing, double elevDeg, double homeBearin
         diff = std::fmod(homeBearing - bearing + 360.0, 360.0);
     }
 
-    bool backMode = (diff > 180.0);
-    r.backMode    = backMode;
+    r.backMode = (diff > 180.0);
 
     double panDiff;
-    double tiltPhys;  
-
-    if (!backMode) {
-        panDiff  = diff;
+    double tiltPhys;
+    if (!r.backMode) {
+        panDiff = diff;
         tiltPhys = elevDeg;
     } else {
-        panDiff  = diff - 180.0;      
-        tiltPhys = 180.0 - elevDeg;   
+        panDiff = diff - 180.0;
+        tiltPhys = 180.0 - elevDeg;
     }
 
-    int panInput  = (int)std::round(panDiff  * (270.0 / 180.0));
-
-    int tiltInput = (int)std::round(tiltPhys * (270.0 / 180.0));
+    int panInput = static_cast<int>(std::round(panDiff * (270.0 / 180.0)));
+    int tiltInput = static_cast<int>(std::round(tiltPhys * (270.0 / 180.0)));
 
     if (tiltInput < TILT_INPUT_MIN) tiltInput = TILT_INPUT_MIN;
-
-    if (panInput  < 0)              panInput  = 0;
-    if (panInput  > SERVO_INPUT_MAX) panInput  = SERVO_INPUT_MAX;
+    if (panInput < 0) panInput = 0;
+    if (panInput > SERVO_INPUT_MAX) panInput = SERVO_INPUT_MAX;
     if (tiltInput > TILT_INPUT_MAX) tiltInput = TILT_INPUT_MAX;
 
-    r.pan   = panInput;
-    r.tilt  = tiltInput;
+    r.pan = panInput;
+    r.tilt = tiltInput;
     r.valid = true;
     return r;
 }
@@ -182,7 +181,7 @@ double readCpuUsagePercent() {
     if (totalDiff == 0) {
         return 0.0;
     }
-    return 100.0 * (1.0 - (double)idleDiff / (double)totalDiff);
+    return 100.0 * (1.0 - static_cast<double>(idleDiff) / static_cast<double>(totalDiff));
 }
 
 double readTemperatureC() {
@@ -199,18 +198,18 @@ double readRamPercent() {
     if (sysinfo(&info) != 0 || info.totalram == 0) {
         return 0.0;
     }
-    double total = (double)info.totalram * info.mem_unit;
-    double available = (double)info.freeram * info.mem_unit;
+    double total = static_cast<double>(info.totalram) * info.mem_unit;
+    double available = static_cast<double>(info.freeram) * info.mem_unit;
     return 100.0 * (1.0 - (available / total));
 }
 
 double readDiskFreeGb() {
-    struct statvfs fs;
-    if (statvfs("/", &fs) != 0) {
+    struct statvfs fsInfo;
+    if (statvfs("/", &fsInfo) != 0) {
         return 0.0;
     }
-    unsigned long long freeBytes = (unsigned long long)fs.f_bavail * (unsigned long long)fs.f_frsize;
-    return (double)freeBytes / (1024.0 * 1024.0 * 1024.0);
+    unsigned long long freeBytes = static_cast<unsigned long long>(fsInfo.f_bavail) * static_cast<unsigned long long>(fsInfo.f_frsize);
+    return static_cast<double>(freeBytes) / (1024.0 * 1024.0 * 1024.0);
 }
 
 std::string buildStatsResponse() {
@@ -223,141 +222,266 @@ std::string buildStatsResponse() {
     return response.str();
 }
 
-//SERVO DRIVER
 void setServo(int pin, int servoInput) {
-    int pulseUs = PULSE_MIN_US + (int)std::round(
-        (double)servoInput / SERVO_INPUT_MAX * (PULSE_MAX_US - PULSE_MIN_US)
-    );
-    unsigned int duty = (unsigned int)((double)pulseUs / 20000.0 * 1000000.0);
+    int pulseUs = PULSE_MIN_US + static_cast<int>(std::round(
+        static_cast<double>(servoInput) / SERVO_INPUT_MAX * (PULSE_MAX_US - PULSE_MIN_US)
+    ));
+    unsigned int duty = static_cast<unsigned int>(static_cast<double>(pulseUs) / 20000.0 * 1000000.0);
     gpioHardwarePWM(pin, PWM_FREQ, duty);
 }
 
 void stopServos() {
-    gpioHardwarePWM(PAN_PIN,  0, 0);
+    gpioHardwarePWM(PAN_PIN, 0, 0);
     gpioHardwarePWM(TILT_PIN, 0, 0);
 }
 
-//Tracking function
-void trackPlane(double lat, double lon, double alt, HomeConfig& cfg, int client_socket) {
+bool sendAll(int socketFd, const char* data, size_t length) {
+    size_t sent = 0;
+    while (sent < length) {
+        ssize_t bytesSent = send(socketFd, data + sent, length - sent, 0);
+        if (bytesSent <= 0) {
+            return false;
+        }
+        sent += static_cast<size_t>(bytesSent);
+    }
+    return true;
+}
+
+bool sendLine(int socketFd, const std::string& line) {
+    return sendAll(socketFd, line.c_str(), line.size());
+}
+
+std::string shellQuote(const std::string& value) {
+    std::string quoted = "'";
+    for (char ch : value) {
+        if (ch == '\'') {
+            quoted += "'\\''";
+        } else {
+            quoted += ch;
+        }
+    }
+    quoted += "'";
+    return quoted;
+}
+
+std::string sanitizeHexCode(const std::string& hexCode) {
+    std::string cleaned;
+    cleaned.reserve(hexCode.size());
+    for (char ch : hexCode) {
+        if (std::isalnum(static_cast<unsigned char>(ch))) {
+            cleaned += static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        }
+    }
+    return cleaned.empty() ? "UNKNOWN" : cleaned;
+}
+
+std::string makeTimestamp() {
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
+    std::tm localTime{};
+    localtime_r(&nowTime, &localTime);
+    std::ostringstream stream;
+    stream << std::put_time(&localTime, "%Y%m%d_%H%M%S");
+    return stream.str();
+}
+
+bool captureImage(const fs::path& outputPath) {
+    std::error_code error;
+    fs::create_directories(outputPath.parent_path(), error);
+    if (error) {
+        std::cerr << "Failed to create output directory: " << outputPath.parent_path() << "\n";
+        return false;
+    }
+
+    const std::vector<std::string> commands = {"rpicam-still", "libcamera-still"};
+    for (const auto& command : commands) {
+        std::ostringstream shellCommand;
+        shellCommand
+            << command
+            << " -n"
+            << " --immediate"
+            << " -t 1"
+            << " -o " << shellQuote(outputPath.string());
+
+        std::cout << "Trying " << command << "...\n";
+        const int exitCode = std::system(shellCommand.str().c_str());
+        if (exitCode == 0 && fs::exists(outputPath) && fs::file_size(outputPath, error) > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool sendImageResponse(int clientSocket, const fs::path& imagePath) {
+    std::error_code error;
+    const auto imageSize = fs::file_size(imagePath, error);
+    if (error || imageSize == 0) {
+        return sendLine(clientSocket, "ERROR image_missing\n");
+    }
+
+    std::ifstream imageFile(imagePath, std::ios::binary);
+    if (!imageFile.is_open()) {
+        return sendLine(clientSocket, "ERROR image_open_failed\n");
+    }
+
+    std::ostringstream header;
+    header << "IMAGE " << imageSize << "\n";
+    if (!sendLine(clientSocket, header.str())) {
+        return false;
+    }
+
+    std::vector<char> buffer(8192);
+    while (imageFile) {
+        imageFile.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize bytesRead = imageFile.gcount();
+        if (bytesRead <= 0) {
+            break;
+        }
+        if (!sendAll(clientSocket, buffer.data(), static_cast<size_t>(bytesRead))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void finishRequest(int clientSocket) {
+    close(clientSocket);
+    busy.store(false);
+}
+
+void trackPlane(const std::string& hexCode, double lat, double lon, double alt, HomeConfig& cfg, int clientSocket) {
     std::cout << "Track request: lat=" << lat << ", lon=" << lon << ", alt_m=" << alt << "\n";
-    // use local parameters rather than modifying the const test targets
-    double bearing = haversineBearing(cfg.lat, cfg.lon, lat, lon);
-    double distance = haversineDistance(cfg.lat, cfg.lon, lat, lon);
-    double elev = elevationAngle(distance, cfg.elevation, alt);
 
-    ServoInputs s = computeServoInputs(bearing, elev, cfg.bearing, cfg.pan_clockwise);
+    const double bearing = haversineBearing(cfg.lat, cfg.lon, lat, lon);
+    const double distance = haversineDistance(cfg.lat, cfg.lon, lat, lon);
+    const double elev = elevationAngle(distance, cfg.elevation, alt);
+    const ServoInputs servo = computeServoInputs(bearing, elev, cfg.bearing, cfg.pan_clockwise);
 
-    std::cout << "Computed: bearing=" << bearing << ", distance_m=" << distance << ", elev_deg=" << elev
-              << ", pan=" << s.pan << ", tilt=" << s.tilt << ", valid=" << (s.valid ? "true" : "false") << "\n";
+    std::cout << "Computed: bearing=" << bearing
+              << ", distance_m=" << distance
+              << ", elev_deg=" << elev
+              << ", pan=" << servo.pan
+              << ", tilt=" << servo.tilt
+              << ", valid=" << (servo.valid ? "true" : "false") << "\n";
 
-    if (!s.valid) {
-        send(client_socket, "error", strlen("error"), 0);
-        close(client_socket);
-        busy.store(false);
+    if (!servo.valid) {
+        sendLine(clientSocket, "ERROR invalid_target\n");
+        finishRequest(clientSocket);
         return;
     }
 
     if (gpioInitialise() < 0) {
-        send(client_socket, "error", strlen("error"), 0);
-        close(client_socket);
-        busy.store(false);
+        sendLine(clientSocket, "ERROR gpio_init_failed\n");
+        finishRequest(clientSocket);
         return;
     }
 
     gpioSetMode(PAN_PIN, PI_OUTPUT);
     gpioSetMode(TILT_PIN, PI_OUTPUT);
-
-    setServo(PAN_PIN, s.pan);
-    setServo(TILT_PIN, s.tilt);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(750));
-
+    setServo(PAN_PIN, servo.pan);
+    setServo(TILT_PIN, servo.tilt);
+    std::this_thread::sleep_for(std::chrono::milliseconds(SERVO_SETTLE_MS));
     stopServos();
     gpioTerminate();
 
-    send(client_socket, "success", strlen("success"), 0);
-    close(client_socket);
-    busy.store(false);
+    const fs::path outputPath = fs::path(OUTPUT_DIR) / (sanitizeHexCode(hexCode) + "_" + makeTimestamp() + ".jpg");
+    if (!captureImage(outputPath)) {
+        sendLine(clientSocket, "ERROR capture_failed\n");
+        finishRequest(clientSocket);
+        return;
+    }
+
+    if (!sendImageResponse(clientSocket, outputPath)) {
+        std::cerr << "Failed to send image response\n";
+    }
+    finishRequest(clientSocket);
 }
 
-//Main loop
 int main() {
     HomeConfig cfg;
-    if (!loadConfig("home.yaml", cfg)) return 1;
+    if (!loadConfig("home.yaml", cfg)) {
+        return 1;
+    }
 
     std::cout << "\n--------------------------------------------\n";
     std::cout << "  Camera Tracker Server\n";
     std::cout << "--------------------------------------------\n";
-    std::cout << "  Home   : " << cfg.lat << "°, " << cfg.lon << "°"
-              << " @ " << cfg.elevation << " m\n";
-    std::cout << "  Home bearing (pan=0): " << cfg.bearing << "°\n";
-    std::cout << "  Pan direction: "
-              << (cfg.pan_clockwise ? "clockwise" : "counter-clockwise") << "\n";
+    std::cout << "  Home   : " << cfg.lat << " deg, " << cfg.lon << " deg @ " << cfg.elevation << " m\n";
+    std::cout << "  Home bearing (pan=0): " << cfg.bearing << " deg\n";
+    std::cout << "  Pan direction: " << (cfg.pan_clockwise ? "clockwise" : "counter-clockwise") << "\n";
     std::cout << "--------------------------------------------\n";
     std::cout << "  Listening on port 12345...\n\n";
 
-    int server_fd, new_socket;
+    int serverFd;
     struct sockaddr_in address;
     int addrlen = sizeof(address);
 
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+    if ((serverFd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
         perror("socket failed");
         return 1;
     }
+
+    int opt = 1;
+    setsockopt(serverFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = INADDR_ANY;
     address.sin_port = htons(12345);
 
-    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+    if (bind(serverFd, reinterpret_cast<struct sockaddr*>(&address), sizeof(address)) < 0) {
         perror("bind failed");
         return 1;
     }
 
-    if (listen(server_fd, 3) < 0) {
+    if (listen(serverFd, 3) < 0) {
         perror("listen");
         return 1;
     }
 
     while (true) {
-        if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
+        int newSocket = accept(serverFd, reinterpret_cast<struct sockaddr*>(&address), reinterpret_cast<socklen_t*>(&addrlen));
+        if (newSocket < 0) {
             perror("accept");
             continue;
         }
 
         char buffer[1024] = {0};
-        int valread = read(new_socket, buffer, 1024);
-        if (valread <= 0) {
-            close(new_socket);
+        const int bytesRead = read(newSocket, buffer, sizeof(buffer));
+        if (bytesRead <= 0) {
+            close(newSocket);
             continue;
         }
 
-        std::string request = trim(std::string(buffer, valread));
+        const std::string request = trim(std::string(buffer, bytesRead));
         if (request == "stats") {
-            std::string stats = buildStatsResponse();
-            send(new_socket, stats.c_str(), stats.size(), 0);
-            close(new_socket);
+            const std::string stats = buildStatsResponse();
+            sendLine(newSocket, stats);
+            close(newSocket);
             continue;
         }
 
         std::cout << "Incoming request: " << request << "\n";
 
-        double lat, lon, alt;
-        if (sscanf(request.c_str(), "%lf,%lf,%lf", &lat, &lon, &alt) != 3) {
-            send(new_socket, "error", strlen("error"), 0);
-            close(new_socket);
+        char hexBuffer[64] = {0};
+        double lat = 0.0;
+        double lon = 0.0;
+        double alt = 0.0;
+        if (std::sscanf(request.c_str(), "%63[^,],%lf,%lf,%lf", hexBuffer, &lat, &lon, &alt) != 4) {
+            sendLine(newSocket, "ERROR invalid_request\n");
+            close(newSocket);
             continue;
         }
+        const std::string hexCode = sanitizeHexCode(trim(hexBuffer));
 
         bool expected = false;
         if (!busy.compare_exchange_strong(expected, true)) {
-            send(new_socket, "busy", strlen("busy"), 0);
-            close(new_socket);
+            sendLine(newSocket, "BUSY\n");
+            close(newSocket);
             continue;
         }
 
-        std::thread tracker_thread(trackPlane, lat, lon, alt, std::ref(cfg), new_socket);
-        tracker_thread.detach();
+        std::thread trackerThread(trackPlane, hexCode, lat, lon, alt, std::ref(cfg), newSocket);
+        trackerThread.detach();
     }
 
     return 0;

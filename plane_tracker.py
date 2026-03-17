@@ -1,5 +1,6 @@
 import socket
 import time
+import io
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, db
@@ -13,6 +14,7 @@ import requests
 import csv
 import math
 import fcntl 
+import sys
 from collections import deque
 
 from modules import draw_text, functions, airport_db
@@ -154,6 +156,27 @@ hide_planes_mode = 0
 distance_unit = "NM"
 tracker_status_connected = False
 tracker_device_stats = {"temp": None, "ram": None, "cpu": None, "disk": None}
+tracker_capture_in_progress = False
+tracker_photo_bytes = None
+tracker_photo_surface = None
+tracker_photo_dirty = False
+tracker_photo_status = "No camera image"
+tracker_photo_plane_icao = None
+instance_lock_file = None
+
+def acquire_instance_lock():
+    global instance_lock_file
+    lock_path = '/tmp/plane_tracker.lock'
+    instance_lock_file = open(lock_path, 'w')
+    try:
+        fcntl.flock(instance_lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        instance_lock_file.write(str(os.getpid()))
+        instance_lock_file.flush()
+    except BlockingIOError:
+        print('Another plane_tracker.py instance is already running')
+        sys.exit(1)
+
+acquire_instance_lock()
 
 #Animation variables for smooth panning
 is_animating = False
@@ -242,24 +265,113 @@ def tracker_stats_thread():
         time.sleep(5)
 
 
-def send_to_tracker(lat, lon, alt_ft, add_message_callback=None):
-    global tracker_status_connected
+def receive_tracker_line(sock):
+    header = bytearray()
+    while True:
+        chunk = sock.recv(1)
+        if not chunk:
+            break
+        if chunk == b'\n':
+            break
+        header.extend(chunk)
+    return header.decode(errors='ignore').strip()
+
+
+def receive_tracker_bytes(sock, byte_count):
+    payload = bytearray()
+    while len(payload) < byte_count:
+        chunk = sock.recv(min(4096, byte_count - len(payload)))
+        if not chunk:
+            raise ConnectionError('camera module closed connection during image transfer')
+        payload.extend(chunk)
+    return bytes(payload)
+
+
+def refresh_tracker_photo_surface():
+    global tracker_photo_surface, tracker_photo_dirty, tracker_photo_status
+
+    pending_bytes = None
+    with data_lock:
+        if tracker_photo_dirty and tracker_photo_bytes is not None:
+            pending_bytes = tracker_photo_bytes
+            tracker_photo_dirty = False
+
+    if pending_bytes is None:
+        return
+
+    try:
+        loaded_surface = pygame.image.load(io.BytesIO(pending_bytes), 'camera.jpg').convert()
+    except Exception as error:
+        with data_lock:
+            tracker_photo_surface = None
+            tracker_photo_status = 'Image decode failed'
+        add_message(f'Camera image decode failed: {error}')
+        return
+
+    with data_lock:
+        tracker_photo_surface = loaded_surface
+
+
+def send_to_tracker(lat, lon, alt_ft, target_icao=None, add_message_callback=None):
+    global tracker_status_connected, tracker_capture_in_progress
+    global tracker_photo_bytes, tracker_photo_dirty, tracker_photo_status, tracker_photo_plane_icao
+
     logger = add_message_callback or add_message
+    sock = None
+    with data_lock:
+        tracker_capture_in_progress = True
+        tracker_photo_status = f"Capturing {target_icao}" if target_icao else 'Capturing image'
+
     try:
         alt_m = alt_ft * 0.3048  # convert feet to meters
         logger('Sending position data to camera module')
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
+        sock.settimeout(20)
         sock.connect(('192.168.0.145', 12345))
-        message = f"{lat},{lon},{alt_m}"
-        sock.send(message.encode())
-        response = sock.recv(1024).decode().strip()
-        sock.close()
+        hex_code = target_icao or 'UNKNOWN'
+        message = f"{hex_code},{lat},{lon},{alt_m}"
+        sock.sendall(message.encode())
+
+        header = receive_tracker_line(sock)
+        if not header:
+            raise ConnectionError('camera module sent no response')
+
         tracker_status_connected = True
-        logger(f"Camera module response: {response or 'no response'}")
+        if header.startswith('IMAGE '):
+            image_size = int(header.split(' ', 1)[1])
+            image_bytes = receive_tracker_bytes(sock, image_size)
+            with data_lock:
+                tracker_photo_bytes = image_bytes
+                tracker_photo_dirty = True
+                tracker_photo_plane_icao = target_icao
+                tracker_photo_status = f"Image received for {target_icao}" if target_icao else 'Image received'
+            logger('Camera image received')
+        elif header == 'BUSY':
+            with data_lock:
+                tracker_photo_status = 'Camera busy'
+            logger('Camera module busy')
+        elif header.startswith('ERROR'):
+            detail = header.split(' ', 1)[1] if ' ' in header else 'unknown_error'
+            with data_lock:
+                tracker_photo_status = f"Camera error: {detail.replace('_', ' ')}"
+            logger(f"Camera module error: {detail}")
+        else:
+            with data_lock:
+                tracker_photo_status = f"Unexpected response: {header}"
+            logger(f"Camera module response: {header}")
     except Exception as error:
         tracker_status_connected = False
+        with data_lock:
+            tracker_photo_status = 'Camera unavailable'
         logger(f"Camera module error: {error}")
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        with data_lock:
+            tracker_capture_in_progress = False
 
 #THREAD 2: ADSB Data Processing
 def adsb_processing_thread():
@@ -540,6 +652,7 @@ def main():
     global altitude_filter_threshold, altitude_filter_above, altitude_filter_dragging
     global distance_filter_threshold_km, distance_filter_outside, distance_filter_dragging
     global radar_heatmap_enabled, hide_planes_mode, distance_unit
+    global tracker_capture_in_progress, tracker_photo_status, tracker_photo_plane_icao
     
     start_time = time.time()
     top_graph_last_bucket = load_top_graph_history(active_count_history, total_seen_history, TOP_GRAPH_HISTORY_DIR, TOP_GRAPH_HISTORY_SECONDS, start_time)
@@ -772,8 +885,17 @@ def main():
                         plane_data = displayed_planes[target_icao]["plane_data"]
                         alt_ft = plane_data.get("altitude", "-")
                         if alt_ft != '-':
-                            threading.Thread(target=send_to_tracker, args=(plane_data['last_lat'], plane_data['last_lon'], float(alt_ft), add_message), daemon=True).start()
-                            add_message(f"Aiming camera at {target_icao}")
+                            with data_lock:
+                                camera_is_busy = tracker_capture_in_progress
+                            if camera_is_busy:
+                                add_message('Camera module busy')
+                            else:
+                                with data_lock:
+                                    tracker_capture_in_progress = True
+                                    tracker_photo_status = f"Capturing {target_icao}"
+                                    tracker_photo_plane_icao = target_icao
+                                threading.Thread(target=send_to_tracker, args=(plane_data['last_lat'], plane_data['last_lon'], float(alt_ft), target_icao, add_message), daemon=True).start()
+                                add_message(f"Aiming camera at {target_icao}")
                         else:
                             add_message("Target plane altitude unknown, cannot track")
                     else:
@@ -867,6 +989,8 @@ def main():
                 view_center_lat = animation_target_lat
                 view_center_lon = animation_target_lon
         
+        refresh_tracker_photo_surface()
+
         #Clear screen
         pygame.draw.rect(window, (0, 0, 0), (0, 0, width, height))
         
@@ -1333,12 +1457,41 @@ def main():
         else:
             draw_text.center(window, "NO PLANE SELECTED", text_font1, (100, 100, 100), SIDEBAR_X + SIDEBAR_WIDTH // 2, separator_y + 80)
 
-        #Picture Placeholder
+        #Picture Section
         pic_y = 377
         pic_h = 203
         pic_x = SIDEBAR_X + 5
         pic_w = SIDEBAR_WIDTH - 15
         pygame.draw.rect(window, (100, 100, 100), (pic_x, pic_y, pic_w, pic_h), 1)
+
+        #Picture holder
+        picture_holder_rect = pygame.Rect(pic_x, pic_y, 271, 203)
+        pygame.draw.rect(window, (20, 20, 20), picture_holder_rect, 0)
+        pygame.draw.rect(window, (100, 100, 100), picture_holder_rect, 1)
+
+        with data_lock:
+            camera_photo_surface = tracker_photo_surface
+            camera_busy = tracker_capture_in_progress
+            camera_status_text = tracker_photo_status
+            camera_photo_plane = tracker_photo_plane_icao
+
+        if camera_photo_surface is not None:
+            inner_rect = picture_holder_rect.inflate(-6, -6)
+            image_width, image_height = camera_photo_surface.get_size()
+            if image_width > 0 and image_height > 0:
+                scale = min(inner_rect.width / image_width, inner_rect.height / image_height)
+                scaled_size = (max(1, int(image_width * scale)), max(1, int(image_height * scale)))
+                scaled_surface = pygame.transform.smoothscale(camera_photo_surface, scaled_size)
+                scaled_rect = scaled_surface.get_rect(center=picture_holder_rect.center)
+                window.blit(scaled_surface, scaled_rect)
+        else:
+            placeholder_text = 'CAMERA BUSY' if camera_busy else 'NO IMAGE'
+            draw_text.center(window, placeholder_text, text_font1, (100, 100, 100), picture_holder_rect.centerx, picture_holder_rect.centery - 8)
+
+        if camera_status_text:
+            draw_text.center(window, camera_status_text[:36], text_font3, (180, 180, 180), picture_holder_rect.centerx, picture_holder_rect.bottom - 14)
+        if camera_photo_plane:
+            draw_text.center(window, f"HEX {camera_photo_plane}", text_font3, (180, 180, 180), picture_holder_rect.centerx, picture_holder_rect.top + 10)
 
         #LOGS BOX 
         logs_y = pic_y + pic_h + 10
@@ -1398,4 +1551,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
 
