@@ -97,6 +97,8 @@ shutdown_icon = pygame.image.load(os.path.join("textures", "icons", "shutdown.pn
 restart_icon = pygame.image.load(os.path.join("textures", "icons", "restart.png")).convert_alpha()
 clear_graph_icon = pygame.image.load(os.path.join("textures", "icons", "clear_graph.png")).convert_alpha()
 track_target_icon = pygame.image.load(os.path.join("textures", "icons", "track_target.png")).convert_alpha()
+auto_tracking_icon = pygame.image.load(os.path.join("textures", "icons", "auto_tracking.png")).convert_alpha()
+manual_tracking_icon = pygame.image.load(os.path.join("textures", "icons", "manual_tracking.png")).convert_alpha()
 heatmap_on_icon = pygame.image.load(os.path.join("textures", "icons", "heatmap_on.png")).convert_alpha()
 heatmap_off_icon = pygame.image.load(os.path.join("textures", "icons", "heatmap_off.png")).convert_alpha()
 plane_only_mode_icon = pygame.image.load(os.path.join("textures", "icons", "plane.png")).convert_alpha()
@@ -138,9 +140,10 @@ toolbar_start_x = SIDEBAR_X + 5
 zoom_in_ctrl_rect = pygame.Rect(toolbar_start_x, height - 50, btn_w, btn_h)
 zoom_out_ctrl_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 1, height - 50, btn_w, btn_h)
 mode_toggle_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 2, height - 50, btn_w, btn_h)
-restart_button_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 3, height - 50, btn_w, btn_h)
-off_button_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 4, height - 50, btn_w, btn_h)
-clear_graph_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 5, height - 50, btn_w, btn_h)
+auto_track_mode_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 3, height - 50, btn_w, btn_h)
+restart_button_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 4, height - 50, btn_w, btn_h)
+off_button_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 5, height - 50, btn_w, btn_h)
+clear_graph_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 6, height - 50, btn_w, btn_h)
 
 #Global for plane selection
 selected_plane_icao = None
@@ -162,6 +165,12 @@ tracker_photo_surface = None
 tracker_photo_dirty = False
 tracker_photo_status = "No camera image"
 tracker_photo_plane_icao = None
+tracker_plane_photo_cache = {}
+tracking_mode_auto = False
+auto_track_queue = deque()
+auto_track_inside_icaos = set()
+AUTO_TRACK_POLYGON_KEYS = (("tlLat", "tlLon"), ("trLat", "trLon"), ("brLat", "brLon"), ("blLat", "blLon"))
+AUTO_TRACK_CONFIGURED = all(_config.get(lat_key) is not None and _config.get(lon_key) is not None for lat_key, lon_key in AUTO_TRACK_POLYGON_KEYS)
 instance_lock_file = None
 
 def acquire_instance_lock():
@@ -310,6 +319,8 @@ def refresh_tracker_photo_surface():
 
     with data_lock:
         tracker_photo_surface = loaded_surface
+        if tracker_photo_plane_icao:
+            tracker_plane_photo_cache[tracker_photo_plane_icao] = loaded_surface
 
 
 def send_to_tracker(lat, lon, alt_ft, target_icao=None, add_message_callback=None):
@@ -372,6 +383,66 @@ def send_to_tracker(lat, lon, alt_ft, target_icao=None, add_message_callback=Non
                 pass
         with data_lock:
             tracker_capture_in_progress = False
+
+
+def begin_camera_tracking(target_icao, logger=None, auto_select=False):
+    global selected_plane_icao, tracker_capture_in_progress, tracker_photo_status, tracker_photo_plane_icao
+
+    logger = logger or add_message
+    with data_lock:
+        if tracker_capture_in_progress:
+            logger('Camera module busy')
+            return False
+
+        display_data = displayed_planes.get(target_icao)
+        if not display_data:
+            logger('No target plane available for tracking')
+            return False
+
+        plane_data = display_data.get('plane_data', {})
+        alt_ft = plane_data.get('altitude', '-')
+        lat = plane_data.get('last_lat')
+        lon = plane_data.get('last_lon')
+        if alt_ft == '-' or lat is None or lon is None:
+            logger('Target plane altitude unknown, cannot track')
+            return False
+
+        tracker_capture_in_progress = True
+        tracker_photo_status = f"Capturing {target_icao}"
+        tracker_photo_plane_icao = target_icao
+
+    if auto_select:
+        selected_plane_icao = target_icao
+
+    threading.Thread(target=send_to_tracker, args=(lat, lon, float(alt_ft), target_icao, logger), daemon=True).start()
+    logger(f"Aiming camera at {target_icao}")
+    return True
+
+
+def build_auto_track_polygon(range_km, centre_lat, centre_lon):
+    if not AUTO_TRACK_CONFIGURED:
+        return []
+
+    polygon = []
+    for lat_key, lon_key in AUTO_TRACK_POLYGON_KEYS:
+        polygon.append(functions.coords_to_xy(float(_config[lat_key]), float(_config[lon_key]), range_km, centre_lat, centre_lon, width, height, RADAR_CENTER_X, RADAR_CENTER_Y))
+    return polygon
+
+
+def point_in_polygon(point, polygon):
+    if len(polygon) < 3:
+        return False
+
+    x, y = point
+    inside = False
+    for index in range(len(polygon)):
+        x1, y1 = polygon[index]
+        x2, y2 = polygon[(index + 1) % len(polygon)]
+        if ((y1 > y) != (y2 > y)):
+            intersect_x = (x2 - x1) * (y - y1) / max(1e-9, (y2 - y1)) + x1
+            if x < intersect_x:
+                inside = not inside
+    return inside
 
 #THREAD 2: ADSB Data Processing
 def adsb_processing_thread():
@@ -652,7 +723,7 @@ def main():
     global altitude_filter_threshold, altitude_filter_above, altitude_filter_dragging
     global distance_filter_threshold_km, distance_filter_outside, distance_filter_dragging
     global radar_heatmap_enabled, hide_planes_mode, distance_unit
-    global tracker_capture_in_progress, tracker_photo_status, tracker_photo_plane_icao
+    global tracker_capture_in_progress, tracker_photo_status, tracker_photo_plane_icao, tracking_mode_auto
     
     start_time = time.time()
     top_graph_last_bucket = load_top_graph_history(active_count_history, total_seen_history, TOP_GRAPH_HISTORY_DIR, TOP_GRAPH_HISTORY_SECONDS, start_time)
@@ -860,6 +931,10 @@ def main():
                     continue
 
                 if track_plane_button_rect.collidepoint(mouse_x, mouse_y):
+                    if tracking_mode_auto:
+                        add_message('Manual tracking disabled in auto mode')
+                        continue
+
                     target_icao = selected_plane_icao if (selected_plane_icao in displayed_planes) else None
                     if not target_icao:
                         min_track_dist = float("inf")
@@ -881,23 +956,8 @@ def main():
                                 if dist < min_track_dist:
                                     min_track_dist = dist
                                     target_icao = icao
-                    if target_icao and target_icao in displayed_planes:
-                        plane_data = displayed_planes[target_icao]["plane_data"]
-                        alt_ft = plane_data.get("altitude", "-")
-                        if alt_ft != '-':
-                            with data_lock:
-                                camera_is_busy = tracker_capture_in_progress
-                            if camera_is_busy:
-                                add_message('Camera module busy')
-                            else:
-                                with data_lock:
-                                    tracker_capture_in_progress = True
-                                    tracker_photo_status = f"Capturing {target_icao}"
-                                    tracker_photo_plane_icao = target_icao
-                                threading.Thread(target=send_to_tracker, args=(plane_data['last_lat'], plane_data['last_lon'], float(alt_ft), target_icao, add_message), daemon=True).start()
-                                add_message(f"Aiming camera at {target_icao}")
-                        else:
-                            add_message("Target plane altitude unknown, cannot track")
+                    if target_icao:
+                        begin_camera_tracking(target_icao, logger=add_message, auto_select=False)
                     else:
                         add_message("No target plane available for tracking")
                     continue
@@ -937,6 +997,13 @@ def main():
                     _config['offlineMode'] = offline
                     functions.save_config(_config)
                     add_message(f"Switched to {'offline' if offline else 'online'} mode")
+
+                elif auto_track_mode_rect.collidepoint(mouse_x, mouse_y):
+                    tracking_mode_auto = not tracking_mode_auto
+                    auto_track_queue.clear()
+                    auto_track_inside_icaos.clear()
+                    add_message(f"Switched to {'auto' if tracking_mode_auto else 'manual'} camera tracking")
+                    continue
 
                 elif clear_graph_rect.collidepoint(mouse_x, mouse_y):
                     with data_lock:
@@ -1025,6 +1092,11 @@ def main():
             label_text = str(round(label_value)) if label_value is not None else '-'
             draw_text.normal(window, label_text, text_font3, (225, 225, 225), int(label_x), int(label_y))
         
+        auto_track_polygon = build_auto_track_polygon(range_km, view_center_lat, view_center_lon)
+        if len(auto_track_polygon) >= 3:
+            polygon_colour = (0, 255, 0) if tracking_mode_auto else (100, 100, 100)
+            pygame.draw.lines(window, polygon_colour, True, auto_track_polygon, 1)
+
         #Draw home location marker
         home_x, home_y = functions.coords_to_xy(
             _config['myLat'], _config['myLon'], range_km,
@@ -1111,6 +1183,7 @@ def main():
         
         #Draw planes with unique highlight
         current_plane_rects = {}
+        current_auto_track_icaos = set()
         target_icao = selected_plane_icao if (selected_plane_icao in displayed_planes) else closest_plane
 
         with data_lock:
@@ -1152,6 +1225,9 @@ def main():
                         heading = functions.calculate_heading(prev_lat, prev_lon, lat, lon)
                         plane["track"] = heading #Update track with calculated heading
                     
+                    if tracking_mode_auto and point_in_polygon((x, y), auto_track_polygon):
+                        current_auto_track_icaos.add(icao)
+
                     if icao == target_icao:
                         location_history = plane.get("location_history", {})
                         if location_history and isinstance(location_history, dict) and len(location_history) > 1:
@@ -1233,6 +1309,25 @@ def main():
         with data_lock:
             plane_rects = current_plane_rects
         
+        if tracking_mode_auto:
+            new_auto_track_icaos = current_auto_track_icaos - auto_track_inside_icaos
+            for icao in sorted(new_auto_track_icaos):
+                if icao not in auto_track_queue:
+                    auto_track_queue.append(icao)
+            auto_track_inside_icaos.clear()
+            auto_track_inside_icaos.update(current_auto_track_icaos)
+
+            with data_lock:
+                camera_busy_for_auto = tracker_capture_in_progress
+            if not camera_busy_for_auto:
+                while auto_track_queue:
+                    queued_icao = auto_track_queue.popleft()
+                    if begin_camera_tracking(queued_icao, logger=add_message, auto_select=True):
+                        break
+        else:
+            auto_track_queue.clear()
+            auto_track_inside_icaos.clear()
+
         #Reset clip for UI elements outside radar
         window.set_clip(None)
         
@@ -1262,10 +1357,10 @@ def main():
         with data_lock:
             tracker_stats_snapshot = dict(tracker_device_stats)
 
-        tracker_temp_text = f"TEMP:{round(tracker_stats_snapshot['temp'])}C" if tracker_stats_snapshot['temp'] is not None else "TEMP: --"
-        tracker_ram_text = f"RAM:{round(tracker_stats_snapshot['ram'])}%" if tracker_stats_snapshot['ram'] is not None else "RAM: --"
-        tracker_cpu_text = f"CPU:{round(tracker_stats_snapshot['cpu'])}%" if tracker_stats_snapshot['cpu'] is not None else "CPU: --"
-        tracker_disk_text = f"DISK:{round(tracker_stats_snapshot['disk'], 1)}GB" if tracker_stats_snapshot['disk'] is not None else "DISK: --"
+        tracker_temp_text = f"TEMP:{round(tracker_stats_snapshot['temp'])}C" if tracker_stats_snapshot['temp'] is not None else "TEMP: N/A"
+        tracker_ram_text = f"RAM:{round(tracker_stats_snapshot['ram'])}%" if tracker_stats_snapshot['ram'] is not None else "RAM: N/A"
+        tracker_cpu_text = f"CPU:{round(tracker_stats_snapshot['cpu'])}%" if tracker_stats_snapshot['cpu'] is not None else "CPU: N/A"
+        tracker_disk_text = f"DISK:{round(tracker_stats_snapshot['disk'], 1)}GB" if tracker_stats_snapshot['disk'] is not None else "DISK: N/A"
 
         draw_text.normal(window, "Tracker:", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 700)
         draw_text.normal(window, tracker_temp_text, stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 720)
@@ -1340,7 +1435,8 @@ def main():
         hits_graph_rect = pygame.Rect(SIDEBAR_X + 580, separator_y + 10, 240, 130)
 
         #Track plane button
-        pygame.draw.rect(window, (255, 255, 255), track_plane_button_rect, 0)
+        track_button_colour = (120, 120, 120) if tracking_mode_auto else (255, 255, 255)
+        pygame.draw.rect(window, track_button_colour, track_plane_button_rect, 0)
         pygame.draw.rect(window, (100, 100, 100), track_plane_button_rect, 1)
         scaled_track_target_icon = pygame.transform.smoothscale(track_target_icon, (32, 32))
         window.blit(scaled_track_target_icon, scaled_track_target_icon.get_rect(center=track_plane_button_rect.center))
@@ -1470,10 +1566,12 @@ def main():
         pygame.draw.rect(window, (100, 100, 100), picture_holder_rect, 1)
 
         with data_lock:
-            camera_photo_surface = tracker_photo_surface
             camera_busy = tracker_capture_in_progress
             camera_status_text = tracker_photo_status
             camera_photo_plane = tracker_photo_plane_icao
+            selected_camera_photo_surface = tracker_plane_photo_cache.get(selected_plane_icao) if selected_plane_icao else None
+
+        camera_photo_surface = selected_camera_photo_surface
 
         if camera_photo_surface is not None:
             inner_rect = picture_holder_rect.inflate(-6, -6)
@@ -1490,8 +1588,9 @@ def main():
 
         if camera_status_text:
             draw_text.center(window, camera_status_text[:36], text_font3, (180, 180, 180), picture_holder_rect.centerx, picture_holder_rect.bottom - 14)
-        if camera_photo_plane:
-            draw_text.center(window, f"HEX {camera_photo_plane}", text_font3, (180, 180, 180), picture_holder_rect.centerx, picture_holder_rect.top + 10)
+        photo_label_icao = selected_plane_icao if selected_camera_photo_surface is not None and selected_plane_icao else camera_photo_plane
+        if photo_label_icao:
+            draw_text.center(window, f"HEX {photo_label_icao}", text_font3, (180, 180, 180), picture_holder_rect.centerx, picture_holder_rect.top + 10)
 
         #LOGS BOX 
         logs_y = pic_y + pic_h + 10
@@ -1535,6 +1634,7 @@ def main():
             (zoom_in_ctrl_rect, zoom_in_icon),
             (zoom_out_ctrl_rect, zoom_out_icon),
             (mode_toggle_rect, offline_mode_icon if offline else online_mode_icon),
+            (auto_track_mode_rect, manual_tracking_icon if tracking_mode_auto else auto_tracking_icon),
             (restart_button_rect, restart_icon),
             (clear_graph_rect, clear_graph_icon),
             (off_button_rect, shutdown_icon),

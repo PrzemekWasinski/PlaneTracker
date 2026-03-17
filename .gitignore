@@ -16,3 +16,5 @@ textures
 /assets
 
 /camera_module/test_pictures/
+/camera_module/data
+/test/image_recognition_test
