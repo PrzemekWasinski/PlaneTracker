@@ -2,6 +2,7 @@ import socket
 import time
 import io
 from datetime import datetime
+from pathlib import Path
 import firebase_admin
 from firebase_admin import credentials, db
 import pygame
@@ -46,9 +47,12 @@ fade_duration = 10
 
 #Per-plane API retry tracking
 PLANE_API_RETRY_DELAY = 60  #Wait 60 seconds before retrying a failed plane
+ACTIVE_PLANE_RETENTION_SECONDS = 30 * 60
+TRACKER_PHOTO_CACHE_LIMIT = 24
 
 #Thread lock for shared data
 data_lock = threading.Lock()
+tracker_request_lock = threading.Lock()
 
 #Graph history settings
 TOP_GRAPH_HISTORY_SECONDS = 24 * 60 * 60
@@ -59,6 +63,7 @@ PLANE_HIT_SAMPLE_INTERVAL = 60
 DIRECTIONAL_HISTORY_SECONDS = 24 * 60 * 60
 DIRECTIONAL_SECTOR_COUNT = 8
 TOP_GRAPH_HISTORY_DIR = "stats_history"
+TRACKER_IMAGE_DIR = Path("images")
 #Rolling graph data
 active_count_history = deque()
 total_seen_history = deque()
@@ -165,6 +170,7 @@ tracker_photo_surface = None
 tracker_photo_dirty = False
 tracker_photo_status = "No camera image"
 tracker_photo_plane_icao = None
+tracker_pending_photo_plane_icao = None
 tracker_plane_photo_cache = {}
 tracking_mode_auto = False
 auto_track_queue = deque()
@@ -216,20 +222,76 @@ def add_message(message):
         if len(message_queue) > 37:
             message_queue.pop(0)
 
+
+def clone_plane_data_for_ui(plane_data):
+    snapshot = dict(plane_data)
+
+    location_history = plane_data.get("location_history")
+    if isinstance(location_history, dict):
+        snapshot["location_history"] = dict(location_history)
+
+    altitude_history = plane_data.get("altitude_history")
+    if isinstance(altitude_history, deque):
+        snapshot["altitude_history"] = deque(altitude_history)
+
+    hit_history = plane_data.get("hit_history")
+    if isinstance(hit_history, deque):
+        snapshot["hit_history"] = deque(hit_history)
+
+    return snapshot
+
+
+def snapshot_displayed_planes():
+    with data_lock:
+        return {
+            icao: {
+                "plane_data": clone_plane_data_for_ui(display_data.get("plane_data", {})),
+                "display_until": display_data.get("display_until", 0),
+            }
+            for icao, display_data in displayed_planes.items()
+        }
+
+
+def prune_tracker_photo_cache_locked(preserve_icao=None):
+    if preserve_icao and preserve_icao in tracker_plane_photo_cache:
+        tracker_plane_photo_cache[preserve_icao] = tracker_plane_photo_cache.pop(preserve_icao)
+
+    while len(tracker_plane_photo_cache) > TRACKER_PHOTO_CACHE_LIMIT:
+        oldest_icao = next(iter(tracker_plane_photo_cache))
+        if preserve_icao and oldest_icao == preserve_icao and len(tracker_plane_photo_cache) > 1:
+            tracker_plane_photo_cache[oldest_icao] = tracker_plane_photo_cache.pop(oldest_icao)
+            oldest_icao = next(iter(tracker_plane_photo_cache))
+        del tracker_plane_photo_cache[oldest_icao]
+
+
+def build_tracker_image_path(target_icao):
+    hex_code = ''.join(ch for ch in str(target_icao or 'UNKNOWN').upper() if ch.isalnum()) or 'UNKNOWN'
+    timestamp = datetime.now().strftime('%d-%m-%Y_%H-%M-%S')
+    return TRACKER_IMAGE_DIR / f"{hex_code}_{timestamp}.jpg"
+
+
+def save_tracker_image(image_bytes, target_icao):
+    output_path = build_tracker_image_path(target_icao)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(image_bytes)
+    return output_path
+
 #Helper thread for API fetches to avoid blocking the radar
 def api_worker_thread(icao, plane_data):
     api_data = fetch_plane_info(icao)
     if api_data:
+        plane_snapshot = None
         with data_lock:
             if icao in active_planes:
                 active_planes[icao].update(api_data)
+                plane_snapshot = dict(active_planes[icao])
             if icao in displayed_planes:
                 displayed_planes[icao]["plane_data"].update(api_data)
 
         #Only save if we got actual plane data (not just an error timestamp)
-        if api_data.get("manufacturer") and api_data.get("manufacturer") != "-":
-            save_plane_to_csv(icao, active_planes[icao])
-            upload_to_firebase(active_planes[icao])
+        if plane_snapshot and api_data.get("manufacturer") and api_data.get("manufacturer") != "-":
+            save_plane_to_csv(icao, plane_snapshot)
+            upload_to_firebase(plane_snapshot)
 
 
 def fetch_tracker_stats(log_result=False):
@@ -298,12 +360,17 @@ def receive_tracker_bytes(sock, byte_count):
 
 def refresh_tracker_photo_surface():
     global tracker_photo_surface, tracker_photo_dirty, tracker_photo_status
+    global tracker_photo_bytes, tracker_pending_photo_plane_icao
 
     pending_bytes = None
+    pending_plane_icao = None
     with data_lock:
         if tracker_photo_dirty and tracker_photo_bytes is not None:
             pending_bytes = tracker_photo_bytes
+            pending_plane_icao = tracker_pending_photo_plane_icao
             tracker_photo_dirty = False
+            tracker_photo_bytes = None
+            tracker_pending_photo_plane_icao = None
 
     if pending_bytes is None:
         return
@@ -319,19 +386,17 @@ def refresh_tracker_photo_surface():
 
     with data_lock:
         tracker_photo_surface = loaded_surface
-        if tracker_photo_plane_icao:
-            tracker_plane_photo_cache[tracker_photo_plane_icao] = loaded_surface
+        if pending_plane_icao:
+            tracker_plane_photo_cache[pending_plane_icao] = loaded_surface
+            prune_tracker_photo_cache_locked(preserve_icao=pending_plane_icao)
 
 
 def send_to_tracker(lat, lon, alt_ft, target_icao=None, add_message_callback=None):
     global tracker_status_connected, tracker_capture_in_progress
-    global tracker_photo_bytes, tracker_photo_dirty, tracker_photo_status, tracker_photo_plane_icao
+    global tracker_photo_bytes, tracker_photo_dirty, tracker_photo_status, tracker_photo_plane_icao, tracker_pending_photo_plane_icao
 
     logger = add_message_callback or add_message
     sock = None
-    with data_lock:
-        tracker_capture_in_progress = True
-        tracker_photo_status = f"Capturing {target_icao}" if target_icao else 'Capturing image'
 
     try:
         alt_m = alt_ft * 0.3048  # convert feet to meters
@@ -351,11 +416,23 @@ def send_to_tracker(lat, lon, alt_ft, target_icao=None, add_message_callback=Non
         if header.startswith('IMAGE '):
             image_size = int(header.split(' ', 1)[1])
             image_bytes = receive_tracker_bytes(sock, image_size)
+            saved_image_path = None
+            save_error = None
+            try:
+                saved_image_path = save_tracker_image(image_bytes, target_icao)
+            except Exception as error:
+                save_error = error
+
             with data_lock:
                 tracker_photo_bytes = image_bytes
                 tracker_photo_dirty = True
+                tracker_pending_photo_plane_icao = target_icao
                 tracker_photo_plane_icao = target_icao
                 tracker_photo_status = f"Image received for {target_icao}" if target_icao else 'Image received'
+            if save_error is not None:
+                logger(f"Image save failed: {save_error}")
+            elif saved_image_path is not None:
+                logger(f"Camera image saved: {saved_image_path.name}")
             logger('Camera image received')
         elif header == 'BUSY':
             with data_lock:
@@ -383,66 +460,81 @@ def send_to_tracker(lat, lon, alt_ft, target_icao=None, add_message_callback=Non
                 pass
         with data_lock:
             tracker_capture_in_progress = False
+        if tracker_request_lock.locked():
+            tracker_request_lock.release()
 
 
 def begin_camera_tracking(target_icao, logger=None, auto_select=False):
     global selected_plane_icao, tracker_capture_in_progress, tracker_photo_status, tracker_photo_plane_icao
 
     logger = logger or add_message
-    with data_lock:
-        if tracker_capture_in_progress:
-            logger('Camera module busy')
-            return False
-
-        display_data = displayed_planes.get(target_icao)
-        if not display_data:
-            logger('No target plane available for tracking')
-            return False
-
-        plane_data = display_data.get('plane_data', {})
-        alt_ft = plane_data.get('altitude', '-')
-        lat = plane_data.get('last_lat')
-        lon = plane_data.get('last_lon')
-        if alt_ft == '-' or lat is None or lon is None:
-            logger('Target plane altitude unknown, cannot track')
-            return False
-
-        tracker_capture_in_progress = True
-        tracker_photo_status = f"Capturing {target_icao}"
-        tracker_photo_plane_icao = target_icao
-
-    if auto_select:
-        selected_plane_icao = target_icao
-
-    threading.Thread(target=send_to_tracker, args=(lat, lon, float(alt_ft), target_icao, logger), daemon=True).start()
-    logger(f"Aiming camera at {target_icao}")
-    return True
-
-
-def build_auto_track_polygon(range_km, centre_lat, centre_lon):
-    if not AUTO_TRACK_CONFIGURED:
-        return []
-
-    polygon = []
-    for lat_key, lon_key in AUTO_TRACK_POLYGON_KEYS:
-        polygon.append(functions.coords_to_xy(float(_config[lat_key]), float(_config[lon_key]), range_km, centre_lat, centre_lon, width, height, RADAR_CENTER_X, RADAR_CENTER_Y))
-    return polygon
-
-
-def point_in_polygon(point, polygon):
-    if len(polygon) < 3:
+    if not tracker_request_lock.acquire(blocking=False):
+        logger('Camera module busy')
         return False
 
-    x, y = point
-    inside = False
-    for index in range(len(polygon)):
-        x1, y1 = polygon[index]
-        x2, y2 = polygon[(index + 1) % len(polygon)]
-        if ((y1 > y) != (y2 > y)):
-            intersect_x = (x2 - x1) * (y - y1) / max(1e-9, (y2 - y1)) + x1
-            if x < intersect_x:
-                inside = not inside
-    return inside
+    try:
+        with data_lock:
+            if tracker_capture_in_progress:
+                logger('Camera module busy')
+                return False
+
+            display_data = displayed_planes.get(target_icao)
+            if not display_data:
+                logger('No target plane available for tracking')
+                return False
+
+            plane_data = display_data.get('plane_data', {})
+            alt_ft = plane_data.get('altitude', '-')
+            lat = plane_data.get('last_lat')
+            lon = plane_data.get('last_lon')
+            if alt_ft == '-' or lat is None or lon is None:
+                logger('Target plane altitude unknown, cannot track')
+                return False
+
+            tracker_capture_in_progress = True
+            tracker_photo_status = f"Capturing {target_icao}"
+            tracker_photo_plane_icao = target_icao
+
+        if auto_select:
+            selected_plane_icao = target_icao
+
+        threading.Thread(target=send_to_tracker, args=(lat, lon, float(alt_ft), target_icao, logger), daemon=True).start()
+        logger(f"Aiming camera at {target_icao}")
+        return True
+    except Exception:
+        with data_lock:
+            tracker_capture_in_progress = False
+        tracker_request_lock.release()
+        raise
+
+
+def build_auto_track_rect(range_km, centre_lat, centre_lon):
+    if not AUTO_TRACK_CONFIGURED:
+        return None
+
+    projected_points = []
+    for lat_key, lon_key in AUTO_TRACK_POLYGON_KEYS:
+        projected_points.append(
+            functions.coords_to_xy(
+                float(_config[lat_key]),
+                float(_config[lon_key]),
+                range_km,
+                centre_lat,
+                centre_lon,
+                width,
+                height,
+                RADAR_CENTER_X,
+                RADAR_CENTER_Y,
+            )
+        )
+
+    xs = [point_x for point_x, _ in projected_points]
+    ys = [point_y for _, point_y in projected_points]
+    left = int(min(xs))
+    top = int(min(ys))
+    rect_width = max(1, int(math.ceil(max(xs) - left)))
+    rect_height = max(1, int(math.ceil(max(ys) - top)))
+    return pygame.Rect(left, top, rect_width, rect_height)
 
 #THREAD 2: ADSB Data Processing
 def adsb_processing_thread():
@@ -608,6 +700,14 @@ def adsb_processing_thread():
             old_planes = [icao for icao, d in displayed_planes.items() if d["display_until"] < current_time]
             for icao in old_planes:
                 del displayed_planes[icao]
+
+            stale_active_planes = [
+                icao for icao, plane in active_planes.items()
+                if current_time - plane.get("last_update_time", current_time) > ACTIVE_PLANE_RETENTION_SECONDS
+            ]
+            for icao in stale_active_planes:
+                del active_planes[icao]
+                tracker_plane_photo_cache.pop(icao, None)
 
         if current_time - last_stats_upload > 60 and not offline and network_available:
             try:
@@ -791,6 +891,8 @@ def main():
             cached_flight_stats = functions.get_stats(_config['myLat'], _config['myLon'])
             last_local_stats_refresh = current_time
         
+        displayed_planes_snapshot = snapshot_displayed_planes()
+
         #Handle events
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -816,7 +918,7 @@ def main():
                             range_km += 25
                     
                     #If zoom level changed, keep home-centered behavior when no plane is selected
-                    if old_range != range_km and not (selected_plane_icao and selected_plane_icao in displayed_planes):
+                    if old_range != range_km and not (selected_plane_icao and selected_plane_icao in displayed_planes_snapshot):
                         target_lat = _config['myLat']
                         target_lon = _config['myLon']
 
@@ -935,27 +1037,32 @@ def main():
                         add_message('Manual tracking disabled in auto mode')
                         continue
 
-                    target_icao = selected_plane_icao if (selected_plane_icao in displayed_planes) else None
+                    with data_lock:
+                        manual_track_busy = tracker_capture_in_progress
+                    if manual_track_busy:
+                        add_message('Camera module busy')
+                        continue
+
+                    target_icao = selected_plane_icao if (selected_plane_icao in displayed_planes_snapshot) else None
                     if not target_icao:
                         min_track_dist = float("inf")
-                        with data_lock:
-                            for icao, display_data in displayed_planes.items():
-                                plane = display_data.get("plane_data", {})
-                                if not plane_matches_altitude_filter(plane, altitude_filter_threshold, altitude_filter_above):
+                        for icao, display_data in displayed_planes_snapshot.items():
+                            plane = display_data.get("plane_data", {})
+                            if not plane_matches_altitude_filter(plane, altitude_filter_threshold, altitude_filter_above):
+                                continue
+                            lat = plane.get("last_lat")
+                            lon = plane.get("last_lon")
+                            if lat is None or lon is None:
+                                continue
+                            dist = functions.calculate_distance(view_center_lat, view_center_lon, float(lat), float(lon))
+                            if distance_filter_threshold_km > 0:
+                                if distance_filter_outside and dist < distance_filter_threshold_km:
                                     continue
-                                lat = plane.get("last_lat")
-                                lon = plane.get("last_lon")
-                                if lat is None or lon is None:
+                                if not distance_filter_outside and dist > distance_filter_threshold_km:
                                     continue
-                                dist = functions.calculate_distance(view_center_lat, view_center_lon, float(lat), float(lon))
-                                if distance_filter_threshold_km > 0:
-                                    if distance_filter_outside and dist < distance_filter_threshold_km:
-                                        continue
-                                    if not distance_filter_outside and dist > distance_filter_threshold_km:
-                                        continue
-                                if dist < min_track_dist:
-                                    min_track_dist = dist
-                                    target_icao = icao
+                            if dist < min_track_dist:
+                                min_track_dist = dist
+                                target_icao = icao
                     if target_icao:
                         begin_camera_tracking(target_icao, logger=add_message, auto_select=False)
                     else:
@@ -965,7 +1072,7 @@ def main():
                 elif zoom_in_ctrl_rect.collidepoint(mouse_x, mouse_y):
                     if range_km > 25:
                         range_km -= 25
-                        if not (selected_plane_icao and selected_plane_icao in displayed_planes):
+                        if not (selected_plane_icao and selected_plane_icao in displayed_planes_snapshot):
                             target_lat = _config['myLat']
                             target_lon = _config['myLon']
 
@@ -980,7 +1087,7 @@ def main():
                 elif zoom_out_ctrl_rect.collidepoint(mouse_x, mouse_y): #Zoom out
                     if range_km < 1000:
                         range_km += 25
-                        if not (selected_plane_icao and selected_plane_icao in displayed_planes):
+                        if not (selected_plane_icao and selected_plane_icao in displayed_planes_snapshot):
                             target_lat = _config['myLat']
                             target_lon = _config['myLon']
 
@@ -1038,6 +1145,8 @@ def main():
                     if RADAR_RECT.collidepoint(mouse_x, mouse_y):
                         selected_plane_icao = None
         
+        displayed_planes_snapshot = snapshot_displayed_planes()
+
         #Handle smooth panning animation
         if is_animating:
             elapsed = current_time - animation_start_time
@@ -1092,10 +1201,10 @@ def main():
             label_text = str(round(label_value)) if label_value is not None else '-'
             draw_text.normal(window, label_text, text_font3, (225, 225, 225), int(label_x), int(label_y))
         
-        auto_track_polygon = build_auto_track_polygon(range_km, view_center_lat, view_center_lon)
-        if len(auto_track_polygon) >= 3:
-            polygon_colour = (0, 255, 0) if tracking_mode_auto else (100, 100, 100)
-            pygame.draw.lines(window, polygon_colour, True, auto_track_polygon, 1)
+        auto_track_rect = build_auto_track_rect(range_km, view_center_lat, view_center_lon)
+        if auto_track_rect is not None:
+            rect_colour = (0, 255, 0) if tracking_mode_auto else (100, 100, 100)
+            pygame.draw.rect(window, rect_colour, auto_track_rect, 1)
 
         #Draw home location marker
         home_x, home_y = functions.coords_to_xy(
@@ -1123,25 +1232,24 @@ def main():
         
         
         #Calculate distances using view_center instead of config location
-        with data_lock:
-            for icao, display_data in displayed_planes.items():
-                plane = display_data.get("plane_data", {})
-                if not plane_matches_altitude_filter(plane, altitude_filter_threshold, altitude_filter_above):
-                    continue
-                lat = plane.get("last_lat")
-                lon = plane.get("last_lon")
-                if lat is not None and lon is not None:
-                    dist = functions.calculate_distance(view_center_lat, view_center_lon, float(lat), float(lon))
-                    plane["distance"] = dist 
-                    if distance_filter_threshold_km > 0:
-                        if distance_filter_outside and dist < distance_filter_threshold_km:
-                            continue
-                        if not distance_filter_outside and dist > distance_filter_threshold_km:
-                            continue
-                    if dist < min_dist:
-                        min_dist = dist
-                        closest_plane = icao
-                    displayed_count += 1
+        for icao, display_data in displayed_planes_snapshot.items():
+            plane = display_data.get("plane_data", {})
+            if not plane_matches_altitude_filter(plane, altitude_filter_threshold, altitude_filter_above):
+                continue
+            lat = plane.get("last_lat")
+            lon = plane.get("last_lon")
+            if lat is not None and lon is not None:
+                dist = functions.calculate_distance(view_center_lat, view_center_lon, float(lat), float(lon))
+                plane["distance"] = dist
+                if distance_filter_threshold_km > 0:
+                    if distance_filter_outside and dist < distance_filter_threshold_km:
+                        continue
+                    if not distance_filter_outside and dist > distance_filter_threshold_km:
+                        continue
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_plane = icao
+                displayed_count += 1
 
         heatmap_points = []
         if radar_heatmap_enabled:
@@ -1184,127 +1292,127 @@ def main():
         #Draw planes with unique highlight
         current_plane_rects = {}
         current_auto_track_icaos = set()
-        target_icao = selected_plane_icao if (selected_plane_icao in displayed_planes) else closest_plane
+        target_icao = selected_plane_icao if (selected_plane_icao in displayed_planes_snapshot) else closest_plane
 
-        with data_lock:
-            for icao in list(displayed_planes.keys()):
-                display_data = displayed_planes[icao]
-                plane = display_data["plane_data"]
-                if not plane_matches_altitude_filter(plane, altitude_filter_threshold, altitude_filter_above):
+        for icao, display_data in displayed_planes_snapshot.items():
+            plane = display_data["plane_data"]
+            if not plane_matches_altitude_filter(plane, altitude_filter_threshold, altitude_filter_above):
+                continue
+            if not plane_matches_distance_filter(plane, distance_filter_threshold_km, distance_filter_outside):
+                continue
+            lat = plane.get("last_lat")
+            lon = plane.get("last_lon")
+            if lat is None or lon is None:
+                continue
+
+            #Calculate fade
+            time_remaining = display_data["display_until"] - current_time
+            if time_remaining <= 0:
+                continue
+            fade_value = max(10, int(255 * (time_remaining / fade_duration))) if time_remaining < fade_duration else 255
+
+            try:
+                if hide_planes_mode == 2:
                     continue
-                if not plane_matches_distance_filter(plane, distance_filter_threshold_km, distance_filter_outside):
-                    continue
-                lat = plane.get("last_lat")
-                lon = plane.get("last_lon")
-                if lat is None or lon is None: continue
 
-                #Calculate fade
-                time_remaining = display_data["display_until"] - current_time
-                if time_remaining <= 0: continue
-                fade_value = max(10, int(255 * (time_remaining / fade_duration))) if time_remaining < fade_duration else 255
-                
-                try:
-                    if hide_planes_mode == 2:
-                        continue
+                #NOW using view_center instead of config location
+                x, y = functions.coords_to_xy(float(lat), float(lon), range_km, view_center_lat, view_center_lon, width, height, RADAR_CENTER_X, RADAR_CENTER_Y)
 
-                    #NOW using view_center instead of config location
-                    x, y = functions.coords_to_xy(float(lat), float(lon), range_km, view_center_lat, view_center_lon, width, height, RADAR_CENTER_X, RADAR_CENTER_Y)
-                    
-                    #Calculate Heading
-                    prev_lat = plane.get("prev_lat")
-                    prev_lon = plane.get("prev_lon")
-                    heading = plane.get("track")
-                    if heading == "-" or heading is None:
+                #Calculate Heading
+                prev_lat = plane.get("prev_lat")
+                prev_lon = plane.get("prev_lon")
+                heading = plane.get("track")
+                if heading == "-" or heading is None:
+                    heading = 0.0
+                else:
+                    try:
+                        heading = float(heading)
+                    except ValueError:
                         heading = 0.0
+                if prev_lat is not None and prev_lon is not None:
+                    heading = functions.calculate_heading(prev_lat, prev_lon, lat, lon)
+                    plane["track"] = heading #Update track with calculated heading
+
+                if tracking_mode_auto and auto_track_rect is not None and auto_track_rect.collidepoint(int(x), int(y)):
+                    current_auto_track_icaos.add(icao)
+
+                if icao == target_icao:
+                    location_history = plane.get("location_history", {})
+                    if location_history and isinstance(location_history, dict) and len(location_history) > 1:
+                        #Sort coordinates by timestamp to get chronological order
+                        sorted_coords = sorted(location_history.items())
+
+                        #Get current position to exclude it from trajectory
+                        current_lat = plane.get("last_lat")
+                        current_lon = plane.get("last_lon")
+
+                        #Convert all coordinates to x,y points - NOW using view_center
+                        trajectory_points = []
+                        last_valid_lat = None
+                        last_valid_lon = None
+
+                        for timestamp, coords in sorted_coords:
+                            try:
+                                hist_lat, hist_lon = coords
+
+                                #Skip the current position (it's drawn as the plane icon)
+                                if current_lat is not None and current_lon is not None:
+                                    if abs(float(hist_lat) - float(current_lat)) < 0.0001 and abs(float(hist_lon) - float(current_lon)) < 0.0001:
+                                        continue
+
+                                #Detect and skip impossible jumps (more than 100km from last point)
+                                if last_valid_lat is not None and last_valid_lon is not None:
+                                    distance = functions.calculate_distance(last_valid_lat, last_valid_lon, float(hist_lat), float(hist_lon))
+                                    if distance > 100:  #Skip jumps greater than 100km
+                                        add_message(f"Skipped invalid trajectory point: {distance:.1f}km jump")
+                                        continue
+
+                                hist_x, hist_y = functions.coords_to_xy(
+                                    float(hist_lat), float(hist_lon), range_km,
+                                    view_center_lat, view_center_lon,
+                                    width, height, RADAR_CENTER_X, RADAR_CENTER_Y
+                                )
+
+                                #Only add points that are on or near the screen
+                                if -500 <= hist_x <= width + 500 and -500 <= hist_y <= height + 500:
+                                    trajectory_points.append((hist_x, hist_y))
+                                    last_valid_lat = float(hist_lat)
+                                    last_valid_lon = float(hist_lon)
+
+                            except Exception as e:
+                                add_message(f"Trajectory point error: {str(e)[:30]}")
+                                continue
+
+                        #Draw lines connecting the trajectory points
+                        if len(trajectory_points) > 1:
+                            pygame.draw.lines(window, (0, 255, 255), False, trajectory_points)
+
+                            for i in trajectory_points:
+                                pygame.draw.circle(window, (255, 255, 0), i, 1)
+
+                base_icon = selected_plane_icon if icao == target_icao else plane_icon
+                coloured = base_icon.copy()
+                coloured.set_alpha(fade_value)
+                rotated_image = pygame.transform.rotate(coloured, heading)
+                new_rect = rotated_image.get_rect(center=(x, y))
+                window.blit(rotated_image, new_rect)
+                current_plane_rects[icao] = new_rect
+
+                #Labels
+                label_colour = (0, 255, 255) if icao == target_icao else (0, 255, 0)
+                if hide_planes_mode == 0:
+                    if not offline and plane.get('manufacturer') != "-":
+                        draw_text.fading(window, icao, text_font3, label_colour, x, y - 26, fade_value)
+                        draw_text.fading(window, plane.get("owner", "-"), text_font3, label_colour, x, y - 13, fade_value)
+                        draw_text.fading(window, f"{plane.get('manufacturer')} {plane.get('model')}", text_font3, label_colour, x, y + 13, fade_value)
+                        draw_text.fading(window, f"{plane.get('altitude', '-')}ft", text_font3, label_colour, x, y + 26, fade_value)
                     else:
-                        try:
-                            heading = float(heading)
-                        except ValueError:
-                            heading = 0.0
-                    if prev_lat is not None and prev_lon is not None:
-                        heading = functions.calculate_heading(prev_lat, prev_lon, lat, lon)
-                        plane["track"] = heading #Update track with calculated heading
-                    
-                    if tracking_mode_auto and point_in_polygon((x, y), auto_track_polygon):
-                        current_auto_track_icaos.add(icao)
+                        draw_text.fading(window, icao, text_font3, label_colour, x, y - 13, fade_value)
+                        draw_text.fading(window, f"{plane.get('altitude', '-')}ft", text_font3, label_colour, x, y + 13, fade_value)
 
-                    if icao == target_icao:
-                        location_history = plane.get("location_history", {})
-                        if location_history and isinstance(location_history, dict) and len(location_history) > 1:
-                            #Sort coordinates by timestamp to get chronological order
-                            sorted_coords = sorted(location_history.items())
-                            
-                            #Get current position to exclude it from trajectory
-                            current_lat = plane.get("last_lat")
-                            current_lon = plane.get("last_lon")
-                            
-                            #Convert all coordinates to x,y points - NOW using view_center
-                            trajectory_points = []
-                            last_valid_lat = None
-                            last_valid_lon = None
-                            
-                            for timestamp, coords in sorted_coords:
-                                try:
-                                    hist_lat, hist_lon = coords
-                                    
-                                    #Skip the current position (it's drawn as the plane icon)
-                                    if current_lat is not None and current_lon is not None:
-                                        if abs(float(hist_lat) - float(current_lat)) < 0.0001 and abs(float(hist_lon) - float(current_lon)) < 0.0001:
-                                            continue
-                                    
-                                    #Detect and skip impossible jumps (more than 100km from last point)
-                                    if last_valid_lat is not None and last_valid_lon is not None:
-                                        distance = functions.calculate_distance(last_valid_lat, last_valid_lon, float(hist_lat), float(hist_lon))
-                                        if distance > 100:  #Skip jumps greater than 100km
-                                            add_message(f"Skipped invalid trajectory point: {distance:.1f}km jump")
-                                            continue
-                                    
-                                    hist_x, hist_y = functions.coords_to_xy(
-                                        float(hist_lat), float(hist_lon), range_km,
-                                        view_center_lat, view_center_lon,
-                                        width, height, RADAR_CENTER_X, RADAR_CENTER_Y
-                                    )
-                                    
-                                    #Only add points that are on or near the screen
-                                    if -500 <= hist_x <= width + 500 and -500 <= hist_y <= height + 500:
-                                        trajectory_points.append((hist_x, hist_y))
-                                        last_valid_lat = float(hist_lat)
-                                        last_valid_lon = float(hist_lon)
-                                        
-                                except Exception as e:
-                                    add_message(f"Trajectory point error: {str(e)[:30]}")
-                                    continue
-                            
-                            #Draw lines connecting the trajectory points
-                            if len(trajectory_points) > 1:
-                                pygame.draw.lines(window, (0, 255, 255), False, trajectory_points)
-
-                                for i in trajectory_points:
-                                    pygame.draw.circle(window, (255, 255, 0), i, 1)
-
-                    base_icon = selected_plane_icon if icao == target_icao else plane_icon
-                    coloured = base_icon.copy()
-                    coloured.set_alpha(fade_value)
-                    rotated_image = pygame.transform.rotate(coloured, heading)
-                    new_rect = rotated_image.get_rect(center=(x, y))
-                    window.blit(rotated_image, new_rect)
-                    current_plane_rects[icao] = new_rect
-                    
-                    #Labels 
-                    label_colour = (0, 255, 255) if icao == target_icao else (0, 255, 0)
-                    if hide_planes_mode == 0:
-                        if not offline and plane.get('manufacturer') != "-":
-                            draw_text.fading(window, icao, text_font3, label_colour, x, y - 26, fade_value)
-                            draw_text.fading(window, plane.get("owner", "-"), text_font3, label_colour, x, y - 13, fade_value)
-                            draw_text.fading(window, f"{plane.get('manufacturer')} {plane.get('model')}", text_font3, label_colour, x, y + 13, fade_value)
-                            draw_text.fading(window, f"{plane.get('altitude', '-')}ft", text_font3, label_colour, x, y + 26, fade_value)
-                        else:
-                            draw_text.fading(window, icao, text_font3, label_colour, x, y - 13, fade_value)
-                            draw_text.fading(window, f"{plane.get('altitude', '-')}ft", text_font3, label_colour, x, y + 13, fade_value)
-                            
-                except Exception as e:
-                    print(f"Draw error for {icao}: {e}")
-                    print(x, y)
+            except Exception as e:
+                print(f"Draw error for {icao}: {e}")
+                print(x, y)
         
         with data_lock:
             plane_rects = current_plane_rects
@@ -1369,11 +1477,10 @@ def main():
         draw_text.normal(window, tracker_disk_text, stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 780)
 
 
-        with data_lock:
-            api_status_connected = (not offline) and network_available and any(
-                plane_data.get('manufacturer', '-') != '-'
-                for plane_data in active_planes.values()
-            )
+        api_status_connected = (not offline) and network_available and any(
+            display_data.get("plane_data", {}).get('manufacturer', '-') != '-'
+            for display_data in displayed_planes_snapshot.values()
+        )
         internet_status_connected = network_available
 
         api_status_colour = (0, 255, 0) if api_status_connected else (255, 0, 0)
@@ -1435,15 +1542,15 @@ def main():
         hits_graph_rect = pygame.Rect(SIDEBAR_X + 580, separator_y + 10, 240, 130)
 
         #Track plane button
-        track_button_colour = (120, 120, 120) if tracking_mode_auto else (255, 255, 255)
+        track_button_colour = (120, 120, 120) if (tracking_mode_auto or tracker_capture_in_progress) else (255, 255, 255)
         pygame.draw.rect(window, track_button_colour, track_plane_button_rect, 0)
         pygame.draw.rect(window, (100, 100, 100), track_plane_button_rect, 1)
         scaled_track_target_icon = pygame.transform.smoothscale(track_target_icon, (32, 32))
         window.blit(scaled_track_target_icon, scaled_track_target_icon.get_rect(center=track_plane_button_rect.center))
 
         #Plane Info
-        target_icao = selected_plane_icao if (selected_plane_icao in displayed_planes) else closest_plane
-        p_data = displayed_planes.get(target_icao, {}).get("plane_data") if target_icao else None
+        target_icao = selected_plane_icao if (selected_plane_icao in displayed_planes_snapshot) else closest_plane
+        p_data = displayed_planes_snapshot.get(target_icao, {}).get("plane_data") if target_icao else None
         graph_plane_icao = target_icao
         graph_plane_data = p_data
 
@@ -1569,9 +1676,10 @@ def main():
             camera_busy = tracker_capture_in_progress
             camera_status_text = tracker_photo_status
             camera_photo_plane = tracker_photo_plane_icao
+            target_camera_photo_surface = tracker_plane_photo_cache.get(target_icao) if target_icao else None
             selected_camera_photo_surface = tracker_plane_photo_cache.get(selected_plane_icao) if selected_plane_icao else None
 
-        camera_photo_surface = selected_camera_photo_surface
+        camera_photo_surface = target_camera_photo_surface or selected_camera_photo_surface
 
         if camera_photo_surface is not None:
             inner_rect = picture_holder_rect.inflate(-6, -6)
@@ -1588,7 +1696,7 @@ def main():
 
         if camera_status_text:
             draw_text.center(window, camera_status_text[:36], text_font3, (180, 180, 180), picture_holder_rect.centerx, picture_holder_rect.bottom - 14)
-        photo_label_icao = selected_plane_icao if selected_camera_photo_surface is not None and selected_plane_icao else camera_photo_plane
+        photo_label_icao = target_icao if target_camera_photo_surface is not None and target_icao else (selected_plane_icao if selected_camera_photo_surface is not None and selected_plane_icao else camera_photo_plane)
         if photo_label_icao:
             draw_text.center(window, f"HEX {photo_label_icao}", text_font3, (180, 180, 180), picture_holder_rect.centerx, picture_holder_rect.top + 10)
 

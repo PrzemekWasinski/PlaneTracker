@@ -34,14 +34,14 @@ std::string makeTimestamp() {
 #endif
 
     std::ostringstream stream;
-    stream << std::put_time(&localTime, "%Y%m%d_%H%M%S");
+    stream << std::put_time(&localTime, "%d%m%Y-%H%M%S");
     return stream.str();
 }
 
 int main() {
     const fs::path scriptDir = fs::absolute(fs::path(__FILE__)).parent_path();
-    const fs::path outputDir = scriptDir / "test_pictures";
-    const fs::path outputPath = outputDir / ("camera_test_" + makeTimestamp() + ".jpg");
+    const fs::path outputDir = scriptDir / "images";
+    const fs::path outputPath = outputDir / (std::string("CAMERATEST-") + makeTimestamp() + ".jpg");
 
     std::error_code error;
     fs::create_directories(outputDir, error);

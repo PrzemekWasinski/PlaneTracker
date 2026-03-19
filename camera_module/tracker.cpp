@@ -281,7 +281,7 @@ std::string makeTimestamp() {
     std::tm localTime{};
     localtime_r(&nowTime, &localTime);
     std::ostringstream stream;
-    stream << std::put_time(&localTime, "%Y%m%d_%H%M%S");
+    stream << std::put_time(&localTime, "%d-%m-%Y_%H-%M-%S");
     return stream.str();
 }
 
