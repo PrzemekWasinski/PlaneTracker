@@ -25,6 +25,13 @@ from modules.ui_utils import draw_altitude_filter, draw_filter_action_buttons, d
 
 #Load config
 _config = functions.load_config()
+_config.setdefault('cameraHost', '127.0.0.1')
+_config.setdefault('cameraPort', 12345)
+_config.setdefault('adsbHost', '127.0.0.1')
+_config.setdefault('adsbPort', 30003)
+
+CAMERA_SERVER = (_config['cameraHost'], int(_config['cameraPort']))
+ADSB_SERVER = (_config['adsbHost'], int(_config['adsbPort']))
 
 #Initialize Firebase
 if not firebase_admin._apps:
@@ -76,6 +83,20 @@ ACTIVITY_SPECTRUM_BINS = 96
 activity_spectrum_rows = deque()
 activity_messages_this_second = 0
 activity_last_flush = time.time()
+
+
+def format_service_connection_error(service_name, endpoint, error):
+    host, port = endpoint
+    error_text = str(error)
+    lowered_error = error_text.lower()
+
+    if isinstance(error, ConnectionRefusedError) or 'refused' in lowered_error:
+        return (
+            f"{service_name} unavailable: connection refused at {host}:{port}. "
+            f"Start the {service_name.lower()} service or update config/config.yml."
+        )
+
+    return f"{service_name} unavailable at {host}:{port}: {error_text}"
 
 #PYGAME SETUP
 pygame.init()
@@ -299,7 +320,7 @@ def fetch_tracker_stats(log_result=False):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(3)
-        sock.connect(('192.168.0.145', 12345))
+        sock.connect(CAMERA_SERVER)
         sock.sendall(b'stats')
         response = sock.recv(1024).decode().strip()
         sock.close()
@@ -325,7 +346,7 @@ def fetch_tracker_stats(log_result=False):
         with data_lock:
             tracker_device_stats = {'temp': None, 'ram': None, 'cpu': None, 'disk': None}
         if log_result or was_connected:
-            add_message(f'Camera module unavailable: {error}')
+            add_message(format_service_connection_error('Camera module', CAMERA_SERVER, error))
 
 
 def tracker_stats_thread():
@@ -400,10 +421,10 @@ def send_to_tracker(lat, lon, alt_ft, target_icao=None, add_message_callback=Non
 
     try:
         alt_m = alt_ft * 0.3048  # convert feet to meters
-        logger('Sending position data to camera module')
+        logger(f'Sending position data to camera module at {CAMERA_SERVER[0]}:{CAMERA_SERVER[1]}')
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(20)
-        sock.connect(('192.168.0.145', 12345))
+        sock.connect(CAMERA_SERVER)
         hex_code = target_icao or 'UNKNOWN'
         message = f"{hex_code},{lat},{lon},{alt_m}"
         sock.sendall(message.encode())
@@ -451,7 +472,7 @@ def send_to_tracker(lat, lon, alt_ft, target_icao=None, add_message_callback=Non
         tracker_status_connected = False
         with data_lock:
             tracker_photo_status = 'Camera unavailable'
-        logger(f"Camera module error: {error}")
+        logger(format_service_connection_error('Camera module', CAMERA_SERVER, error))
     finally:
         if sock is not None:
             try:
@@ -540,7 +561,6 @@ def build_auto_track_rect(range_km, centre_lat, centre_lon):
 def adsb_processing_thread():
     global is_receiving, is_processing, tracker_running, offline, network_available
     
-    SERVER_SBS = ("localhost", 30003)
     last_stats_upload = time.time()
     last_network_check = time.time()
     
@@ -562,11 +582,11 @@ def adsb_processing_thread():
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(2)
-                sock.connect(SERVER_SBS)
+                sock.connect(ADSB_SERVER)
                 recv_buffer = ""
-                add_message("Connected to Antenna")
+                add_message(f"Connected to Antenna at {ADSB_SERVER[0]}:{ADSB_SERVER[1]}")
             except Exception as e:
-                add_message(f"Antenna connection error: {e}")
+                add_message(format_service_connection_error('Antenna', ADSB_SERVER, e))
                 sock = None
                 time.sleep(3)
                 continue

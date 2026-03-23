@@ -18,3 +18,22 @@ defaultMode: false
 
 #offline mode for plane tracking
 offlineMode: false
+
+#Local network services
+cameraHost: 0.0.0.0
+cameraPort: 12345
+adsbHost: 0.0.0.0
+adsbPort: 30003
+
+#Auto trackikng borders 
+tlLat: 0.0
+tlLon: 0.0
+
+trLat: 0.0
+trLon: 0.0
+
+blLat: 0.0
+blLon: 0.0
+
+brLat: 0.0
+brLon: 0.0
