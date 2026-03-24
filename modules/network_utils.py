@@ -159,7 +159,7 @@ def upload_to_firebase(plane_data):
         print(f"Firebase error: {e}")
 
 
-def send_to_tracker(lat, lon, alt_ft, add_message=None, host='192.168.0.145', port=12345):
+def send_to_tracker(lat, lon, alt_ft, add_message=None, host='192.168.0.227', port=12345):
     try:
         alt_m = alt_ft * 0.3048
         if add_message:
@@ -178,3 +178,4 @@ def send_to_tracker(lat, lon, alt_ft, add_message=None, host='192.168.0.145', po
     except Exception as e:
         if add_message:
             add_message(f"Camera module error: {e}")
+

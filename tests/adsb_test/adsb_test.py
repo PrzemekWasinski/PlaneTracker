@@ -3,6 +3,7 @@ import socket
 HOST = "localhost"
 PORT = 30003
 
+#Basic script that outputs ADSB data from the antenna
 
 def main():
     print(f"Connecting to {HOST}:{PORT}...")

@@ -1,20 +1,28 @@
+#Useless
 .DS_Store
-
 __pycache__
 /py_cache
 .vscode
-/build
 
-config.yml
+#.csv flight history
 stats_history/
-textures
 
+#Config files
 /config/config.yml
 /camera_module/home.yaml
-/camera_module/build/*
 
-/assets
+#GUI elements
+/textures
 
-/camera_module/test_pictures/
-/camera_module/data
-/test/image_recognition_test
+#ML dataset
+/tests/image_recognition_test/data
+/tests/image_recognition_test/model
+
+#compiled
+/camera_module/build
+/tests/image_recognition_test/build
+
+#images
+/camera_module/test_pictures
+/camera_module/images
+

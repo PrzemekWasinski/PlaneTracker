@@ -291,7 +291,7 @@ bool parseBindValue(const std::string& bindValue, Settings& settings) {
 
 void printUsage() {
     std::cout << "Usage: ./camera_test [ip:port] [--width N] [--height N] [--interval-ms N] [--camera-args '...']\n";
-    std::cout << "Example: ./camera_test 192.168.0.145:8080 --camera-args '--autofocus-mode manual --lens-position 10'\n";
+    std::cout << "Example: ./camera_test 192.168.0.227:8080 --camera-args '--autofocus-mode manual --lens-position 10'\n";
     std::cout << "With no ip:port, the program uses cameraHost from ../config/config.yml and port 8080.\n";
     std::cout << "Choose any port except 12345.\n";
 }
@@ -302,7 +302,7 @@ bool parseArgs(int argc, char* argv[], Settings& settings) {
     int index = 1;
     if (argc >= 2 && std::string(argv[1]).rfind("--", 0) != 0) {
         if (!parseBindValue(argv[1], settings)) {
-            std::cerr << "Invalid bind address. Use the form 192.168.0.145:8080\n";
+            std::cerr << "Invalid bind address. Use the form 192.168.0.227:8080\n";
             return false;
         }
         index = 2;
@@ -410,3 +410,4 @@ int main(int argc, char* argv[]) {
     close(serverFd);
     return 0;
 }
+
