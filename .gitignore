@@ -9,20 +9,10 @@ stats_history/
 
 #Config files
 /config/config.yml
-/camera_module/home.yaml
 
 #GUI elements
 /textures
 
-#ML dataset
-/tests/image_recognition_test/data
-/tests/image_recognition_test/model
+/plane_tracker_mini
 
-#compiled
-/camera_module/build
-/tests/image_recognition_test/build
-
-#images
-/camera_module/test_pictures
-/camera_module/images
 

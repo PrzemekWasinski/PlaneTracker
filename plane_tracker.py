@@ -25,7 +25,7 @@ from modules.ui_utils import draw_altitude_filter, draw_filter_action_buttons, d
 
 #Load config
 _config = functions.load_config()
-_config.setdefault('cameraHost', '127.0.0.1')
+_config.setdefault('cameraHost', '192.168.0.157')
 _config.setdefault('cameraPort', 12345)
 _config.setdefault('adsbHost', '127.0.0.1')
 _config.setdefault('adsbPort', 30003)
@@ -56,6 +56,9 @@ fade_duration = 10
 PLANE_API_RETRY_DELAY = 60  #Wait 60 seconds before retrying a failed plane
 ACTIVE_PLANE_RETENTION_SECONDS = 30 * 60
 TRACKER_PHOTO_CACHE_LIMIT = 24
+TRACKER_PREDICTION_SECONDS = 1.2
+TRACKER_MAX_EXTRAPOLATION_SECONDS = 2.0
+TRACKER_MAX_SAMPLE_AGE_SECONDS = 5.0
 
 #Thread lock for shared data
 data_lock = threading.Lock()
@@ -192,7 +195,9 @@ tracker_photo_dirty = False
 tracker_photo_status = "No camera image"
 tracker_photo_plane_icao = None
 tracker_pending_photo_plane_icao = None
+tracker_photo_meta = {}
 tracker_plane_photo_cache = {}
+tracker_plane_photo_meta_cache = {}
 tracking_mode_auto = False
 auto_track_queue = deque()
 auto_track_inside_icaos = set()
@@ -276,13 +281,18 @@ def snapshot_displayed_planes():
 def prune_tracker_photo_cache_locked(preserve_icao=None):
     if preserve_icao and preserve_icao in tracker_plane_photo_cache:
         tracker_plane_photo_cache[preserve_icao] = tracker_plane_photo_cache.pop(preserve_icao)
+    if preserve_icao and preserve_icao in tracker_plane_photo_meta_cache:
+        tracker_plane_photo_meta_cache[preserve_icao] = tracker_plane_photo_meta_cache.pop(preserve_icao)
 
     while len(tracker_plane_photo_cache) > TRACKER_PHOTO_CACHE_LIMIT:
         oldest_icao = next(iter(tracker_plane_photo_cache))
         if preserve_icao and oldest_icao == preserve_icao and len(tracker_plane_photo_cache) > 1:
             tracker_plane_photo_cache[oldest_icao] = tracker_plane_photo_cache.pop(oldest_icao)
+            if oldest_icao in tracker_plane_photo_meta_cache:
+                tracker_plane_photo_meta_cache[oldest_icao] = tracker_plane_photo_meta_cache.pop(oldest_icao)
             oldest_icao = next(iter(tracker_plane_photo_cache))
         del tracker_plane_photo_cache[oldest_icao]
+        tracker_plane_photo_meta_cache.pop(oldest_icao, None)
 
 
 def build_tracker_image_path(target_icao):
@@ -381,7 +391,7 @@ def receive_tracker_bytes(sock, byte_count):
 
 def refresh_tracker_photo_surface():
     global tracker_photo_surface, tracker_photo_dirty, tracker_photo_status
-    global tracker_photo_bytes, tracker_pending_photo_plane_icao
+    global tracker_photo_bytes, tracker_pending_photo_plane_icao, tracker_plane_photo_meta_cache
 
     pending_bytes = None
     pending_plane_icao = None
@@ -400,7 +410,6 @@ def refresh_tracker_photo_surface():
         loaded_surface = pygame.image.load(io.BytesIO(pending_bytes), 'camera.jpg').convert()
     except Exception as error:
         with data_lock:
-            tracker_photo_surface = None
             tracker_photo_status = 'Image decode failed'
         add_message(f'Camera image decode failed: {error}')
         return
@@ -409,12 +418,57 @@ def refresh_tracker_photo_surface():
         tracker_photo_surface = loaded_surface
         if pending_plane_icao:
             tracker_plane_photo_cache[pending_plane_icao] = loaded_surface
+            tracker_plane_photo_meta_cache[pending_plane_icao] = dict(tracker_photo_meta)
             prune_tracker_photo_cache_locked(preserve_icao=pending_plane_icao)
+
+
+def predict_tracker_target(plane_data):
+    try:
+        lat = float(plane_data.get('last_lat'))
+        lon = float(plane_data.get('last_lon'))
+        alt_ft = float(plane_data.get('altitude'))
+    except (TypeError, ValueError):
+        return None
+
+    last_update_time = plane_data.get('last_update_time')
+    prev_update_time = plane_data.get('prev_update_time')
+    prev_lat = plane_data.get('prev_lat')
+    prev_lon = plane_data.get('prev_lon')
+    prev_alt_ft = plane_data.get('prev_altitude')
+
+    if not isinstance(last_update_time, (int, float)):
+        return lat, lon, alt_ft, 0.0
+
+    sample_age = max(0.0, time.time() - last_update_time)
+    if sample_age > TRACKER_MAX_SAMPLE_AGE_SECONDS:
+        return lat, lon, alt_ft, 0.0
+
+    lead_seconds = min(TRACKER_MAX_EXTRAPOLATION_SECONDS, TRACKER_PREDICTION_SECONDS + sample_age)
+
+    if not isinstance(prev_update_time, (int, float)):
+        return lat, lon, alt_ft, lead_seconds
+
+    try:
+        prev_lat = float(prev_lat)
+        prev_lon = float(prev_lon)
+        prev_alt_ft = alt_ft if prev_alt_ft in (None, '-') else float(prev_alt_ft)
+    except (TypeError, ValueError):
+        return lat, lon, alt_ft, lead_seconds
+
+    dt = last_update_time - prev_update_time
+    if dt <= 0.0 or dt > TRACKER_MAX_SAMPLE_AGE_SECONDS:
+        return lat, lon, alt_ft, lead_seconds
+
+    scale = lead_seconds / dt
+    predicted_lat = lat + (lat - prev_lat) * scale
+    predicted_lon = lon + (lon - prev_lon) * scale
+    predicted_alt_ft = alt_ft + (alt_ft - prev_alt_ft) * scale
+    return predicted_lat, predicted_lon, predicted_alt_ft, lead_seconds
 
 
 def send_to_tracker(lat, lon, alt_ft, target_icao=None, add_message_callback=None):
     global tracker_status_connected, tracker_capture_in_progress
-    global tracker_photo_bytes, tracker_photo_dirty, tracker_photo_status, tracker_photo_plane_icao, tracker_pending_photo_plane_icao
+    global tracker_photo_bytes, tracker_photo_dirty, tracker_photo_status, tracker_photo_plane_icao, tracker_pending_photo_plane_icao, tracker_photo_meta, tracker_plane_photo_meta_cache
 
     logger = add_message_callback or add_message
     sock = None
@@ -435,7 +489,13 @@ def send_to_tracker(lat, lon, alt_ft, target_icao=None, add_message_callback=Non
 
         tracker_status_connected = True
         if header.startswith('IMAGE '):
-            image_size = int(header.split(' ', 1)[1])
+            header_parts = header.split()
+            image_size = int(header_parts[1])
+            image_meta = {}
+            for token in header_parts[2:]:
+                if '=' in token:
+                    key, value = token.split('=', 1)
+                    image_meta[key] = value
             image_bytes = receive_tracker_bytes(sock, image_size)
             saved_image_path = None
             save_error = None
@@ -444,17 +504,46 @@ def send_to_tracker(lat, lon, alt_ft, target_icao=None, add_message_callback=Non
             except Exception as error:
                 save_error = error
 
+            label = image_meta.get('label', 'UNKNOWN')
+            aircraft = image_meta.get('aircraft', 'unknown')
+            confidence = image_meta.get('confidence')
+            raw_score = image_meta.get('raw_score')
+            score_margin = image_meta.get('score_margin')
+            detail = image_meta.get('detail')
+            predictor = image_meta.get('predictor')
+            classification_bits = [f"label={label}", f"aircraft={aircraft}"]
+            if confidence is not None:
+                classification_bits.append(f"confidence={confidence}")
+            if raw_score is not None:
+                classification_bits.append(f"raw_score={raw_score}")
+            if score_margin is not None:
+                classification_bits.append(f"score_margin={score_margin}")
+            if predictor is not None:
+                classification_bits.append(f"predictor={predictor}")
+            if detail is not None:
+                classification_bits.append(f"detail={detail}")
+            classification_text = ', '.join(classification_bits)
+
+            image_meta['target_icao'] = target_icao or 'UNKNOWN'
+            image_meta['received_at'] = datetime.now().strftime('%H:%M:%S')
+            if saved_image_path is not None:
+                image_meta['saved_name'] = saved_image_path.name
+
             with data_lock:
                 tracker_photo_bytes = image_bytes
                 tracker_photo_dirty = True
                 tracker_pending_photo_plane_icao = target_icao
                 tracker_photo_plane_icao = target_icao
-                tracker_photo_status = f"Image received for {target_icao}" if target_icao else 'Image received'
+                tracker_photo_meta = dict(image_meta)
+                tracker_photo_status = (f"Image received for {target_icao} ({classification_text})"
+                                        if target_icao else f"Image received ({classification_text})")
+                if target_icao:
+                    tracker_plane_photo_meta_cache[target_icao] = dict(image_meta)
             if save_error is not None:
                 logger(f"Image save failed: {save_error}")
             elif saved_image_path is not None:
                 logger(f"Camera image saved: {saved_image_path.name}")
-            logger('Camera image received')
+            logger(f"Camera image received: {classification_text}")
         elif header == 'BUSY':
             with data_lock:
                 tracker_photo_status = 'Camera busy'
@@ -505,12 +594,12 @@ def begin_camera_tracking(target_icao, logger=None, auto_select=False):
                 return False
 
             plane_data = display_data.get('plane_data', {})
-            alt_ft = plane_data.get('altitude', '-')
-            lat = plane_data.get('last_lat')
-            lon = plane_data.get('last_lon')
-            if alt_ft == '-' or lat is None or lon is None:
+            predicted_target = predict_tracker_target(plane_data)
+            if predicted_target is None:
                 logger('Target plane altitude unknown, cannot track')
                 return False
+
+            lat, lon, alt_ft, lead_seconds = predicted_target
 
             tracker_capture_in_progress = True
             tracker_photo_status = f"Capturing {target_icao}"
@@ -520,7 +609,7 @@ def begin_camera_tracking(target_icao, logger=None, auto_select=False):
             selected_plane_icao = target_icao
 
         threading.Thread(target=send_to_tracker, args=(lat, lon, float(alt_ft), target_icao, logger), daemon=True).start()
-        logger(f"Aiming camera at {target_icao}")
+        logger(f"Aiming camera at {target_icao} using {lead_seconds:.1f}s lead")
         return True
     except Exception:
         with data_lock:
@@ -627,6 +716,8 @@ def adsb_processing_thread():
                         if "last_lat" in cached:
                             plane_data["prev_lat"] = cached["last_lat"]
                             plane_data["prev_lon"] = cached["last_lon"]
+                            plane_data["prev_update_time"] = cached.get("last_update_time")
+                            plane_data["prev_altitude"] = cached.get("altitude")
                         
                         #Preserve existing location_history
                         plane_data["location_history"] = cached.get("location_history", {})
@@ -728,6 +819,7 @@ def adsb_processing_thread():
             for icao in stale_active_planes:
                 del active_planes[icao]
                 tracker_plane_photo_cache.pop(icao, None)
+                tracker_plane_photo_meta_cache.pop(icao, None)
 
         if current_time - last_stats_upload > 60 and not offline and network_available:
             try:
@@ -1480,7 +1572,7 @@ def main():
         draw_text.normal(window, f"TEMP:{round(cpu_temp)}C", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 610)
         draw_text.normal(window, f"RAM:{ram_percentage}%", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 630)
         draw_text.normal(window, f"CPU:{cpu_percentage}%", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 650)
-        draw_text.normal(window, f"DISK:{disk_free}GB", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 670)
+        draw_text.normal(window, f"DISK:{disk_free}GB", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 670)  
 
         with data_lock:
             tracker_stats_snapshot = dict(tracker_device_stats)
@@ -1694,12 +1786,25 @@ def main():
 
         with data_lock:
             camera_busy = tracker_capture_in_progress
-            camera_status_text = tracker_photo_status
-            camera_photo_plane = tracker_photo_plane_icao
+            latest_camera_photo_surface = tracker_photo_surface
+            latest_camera_photo_meta = dict(tracker_photo_meta)
             target_camera_photo_surface = tracker_plane_photo_cache.get(target_icao) if target_icao else None
+            target_camera_photo_meta = dict(tracker_plane_photo_meta_cache.get(target_icao, {})) if target_icao else {}
             selected_camera_photo_surface = tracker_plane_photo_cache.get(selected_plane_icao) if selected_plane_icao else None
+            selected_camera_photo_meta = dict(tracker_plane_photo_meta_cache.get(selected_plane_icao, {})) if selected_plane_icao else {}
 
-        camera_photo_surface = target_camera_photo_surface or selected_camera_photo_surface
+        if target_camera_photo_surface is not None:
+            camera_photo_surface = target_camera_photo_surface
+            camera_photo_meta = target_camera_photo_meta
+        elif selected_camera_photo_surface is not None:
+            camera_photo_surface = selected_camera_photo_surface
+            camera_photo_meta = selected_camera_photo_meta
+        elif target_icao or selected_plane_icao:
+            camera_photo_surface = None
+            camera_photo_meta = {}
+        else:
+            camera_photo_surface = latest_camera_photo_surface
+            camera_photo_meta = latest_camera_photo_meta
 
         if camera_photo_surface is not None:
             inner_rect = picture_holder_rect.inflate(-6, -6)
@@ -1714,11 +1819,27 @@ def main():
             placeholder_text = 'CAMERA BUSY' if camera_busy else 'NO IMAGE'
             draw_text.center(window, placeholder_text, text_font1, (100, 100, 100), picture_holder_rect.centerx, picture_holder_rect.centery - 8)
 
-        if camera_status_text:
-            draw_text.center(window, camera_status_text[:36], text_font3, (180, 180, 180), picture_holder_rect.centerx, picture_holder_rect.bottom - 14)
-        photo_label_icao = target_icao if target_camera_photo_surface is not None and target_icao else (selected_plane_icao if selected_camera_photo_surface is not None and selected_plane_icao else camera_photo_plane)
-        if photo_label_icao:
-            draw_text.center(window, f"HEX {photo_label_icao}", text_font3, (180, 180, 180), picture_holder_rect.centerx, picture_holder_rect.top + 10)
+        image_prediction_y = 385
+        meta_label = camera_photo_meta.get('label', 'UNKNOWN')
+        meta_confidence = camera_photo_meta.get('confidence', '-')
+        meta_raw_score = camera_photo_meta.get('raw_score', '-')
+        meta_score_margin = camera_photo_meta.get('score_margin', '-')
+        meta_mode = camera_photo_meta.get('mode', '-')
+        meta_pan = camera_photo_meta.get('pan', '-')
+        meta_tilt = camera_photo_meta.get('tilt', '-')
+        meta_bearing = camera_photo_meta.get('bearing_deg', '-')
+        meta_elev = camera_photo_meta.get('elev_deg', '-')
+        camera_state = 'BUSY' if camera_busy else ('FREE' if tracker_status_connected else 'OFFLINE')
+        draw_text.normal(window, f"STATUS: {camera_state}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y)    
+        draw_text.normal(window, f"LABEL: {meta_label}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing)   
+        draw_text.normal(window, f"CONF: {meta_confidence}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 2)  
+        draw_text.normal(window, f"RAW: {meta_raw_score}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 3)  
+        draw_text.normal(window, f"MARGIN: {meta_score_margin}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 4)  
+        draw_text.normal(window, f"MODE: {meta_mode}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 5) 
+        draw_text.normal(window, f"PAN: {meta_pan}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 6) 
+        draw_text.normal(window, f"TILT: {meta_tilt}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 7) 
+        draw_text.normal(window, f"BRG: {meta_bearing}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 8) 
+        draw_text.normal(window, f"ELEV: {meta_elev}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 9)  
 
         #LOGS BOX 
         logs_y = pic_y + pic_h + 10
