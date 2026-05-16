@@ -1,6 +1,8 @@
 import socket
 import time
 import io
+import logging
+import logging.handlers
 from datetime import datetime
 from pathlib import Path
 import firebase_admin
@@ -11,12 +13,20 @@ from time import localtime, strftime
 import psutil
 import os
 import threading
-import requests
-import csv
 import math
-import fcntl 
+import fcntl
 import sys
 from collections import deque
+
+_log_dir = Path("logs")
+_log_dir.mkdir(exist_ok=True)
+log = logging.getLogger("plane_tracker")
+log.setLevel(logging.INFO)
+_log_handler = logging.handlers.RotatingFileHandler(
+    _log_dir / "plane_tracker.log", maxBytes=2 * 1024 * 1024, backupCount=3
+)
+_log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+log.addHandler(_log_handler)
 
 from modules import draw_text, functions, airport_db
 from modules.data_utils import append_directional_hit, append_sample, clear_top_graph_history, load_today_heatmap_hits, load_top_graph_history, persist_top_graph_sample, prune_history, save_plane_to_csv
@@ -214,7 +224,7 @@ def acquire_instance_lock():
         instance_lock_file.write(str(os.getpid()))
         instance_lock_file.flush()
     except BlockingIOError:
-        print('Another plane_tracker.py instance is already running')
+        log.error('Another plane_tracker.py instance is already running')
         sys.exit(1)
 
 acquire_instance_lock()
@@ -794,7 +804,7 @@ def adsb_processing_thread():
         except socket.timeout:
             pass
         except Exception as e:
-            print(f"ADSB loop error: {e}")
+            log.error(f"ADSB loop error: {e}")
             add_message(f"ADSB loop error: {str(e)[:40]}")
             if sock is not None:
                 try:
@@ -834,22 +844,22 @@ def adsb_processing_thread():
                 
                 #More detailed validation and logging
                 if new_stats is None:
-                    print(f"Stats validation: get_stats() returned None")
+                    log.warning("Stats validation: get_stats() returned None")
                     add_message("Stats: get_stats() returned None")
                 elif not isinstance(new_stats, dict):
-                    print(f"Stats validation: get_stats() returned non-dict: {type(new_stats)}")
+                    log.warning(f"Stats validation: get_stats() returned non-dict: {type(new_stats)}")
                     add_message(f"Stats: invalid type {type(new_stats)}")
                 else:
                     #Check if stats has required fields
                     total = new_stats.get('total')
                     if total is None:
-                        print(f"Stats validation: 'total' field missing from stats: {new_stats}")
+                        log.warning(f"Stats validation: 'total' field missing from stats: {new_stats}")
                         add_message("Stats: missing 'total' field")
                     elif not isinstance(total, (int, float)):
-                        print(f"Stats validation: 'total' is not numeric: {total} (type: {type(total)})")
+                        log.warning(f"Stats validation: 'total' is not numeric: {total} (type: {type(total)})")
                         add_message(f"Stats: total not numeric")
                     elif total == 0:
-                        print(f"Stats validation: total is 0 - likely read error")
+                        log.warning("Stats validation: total is 0 - likely read error")
                         add_message("Stats: total is 0 (skipping)")
                     else:
                         #Stats look valid proceed with upload
@@ -863,7 +873,7 @@ def adsb_processing_thread():
                             stats_ref.set(new_stats)
                             add_message(f"Stats updated: {total} total")
                         else:
-                            print(f"Stats validation: Skipping - new ({total}) < current ({current_stats.get('total')})")
+                            log.info(f"Stats upload skipped: new total ({total}) < current ({current_stats.get('total')})")
                             add_message(f"Stats: skip (new < current)")
                 
                 #Upload device stats
@@ -876,7 +886,7 @@ def adsb_processing_thread():
                 
                 last_stats_upload = current_time
             except Exception as e:
-                print(f"Stats upload error: {e}")
+                log.error(f"Stats upload error: {e}")
                 add_message(f"Stats upload error: {str(e)[:30]}")
 
         is_receiving = False
@@ -942,6 +952,7 @@ def main():
     heatmap_hits = deque(load_today_heatmap_hits(TOP_GRAPH_HISTORY_DIR, start_time))
     range_km = 50
     last_local_stats_refresh = 0
+    last_health_log = start_time
     cached_flight_stats = functions.get_stats(_config['myLat'], _config['myLon'])
     last_system_stats_refresh = 0
     cpu_temp = 0
@@ -986,11 +997,11 @@ def main():
         distance_slider_up_rect = pygame.Rect(distance_slider_track_rect.right + 30, distance_slider_track_rect.top + 6, 18, 14)
         distance_slider_down_rect = pygame.Rect(distance_slider_track_rect.right + 30, distance_slider_track_rect.top + 24, 18, 14)
         
-        #Restart every 30 minutes
-        if current_time - start_time > 1800:
-            print("Restarting...")
-            functions.restart_script()
-        
+        #Log health stats every 30 minutes
+        if current_time - last_health_log >= 1800:
+            log.info(f"Health check: CPU temp={cpu_temp:.1f}C, RAM={ram_percentage:.1f}%")
+            last_health_log = current_time
+
         #Refresh expensive local stats on a timer instead of every frame
         if current_time - last_system_stats_refresh >= 1:
             cpu_temp = int(open("/sys/class/thermal/thermal_zone0/temp").read()) / 1000
@@ -1523,8 +1534,7 @@ def main():
                         draw_text.fading(window, f"{plane.get('altitude', '-')}ft", text_font3, label_colour, x, y + 13, fade_value)
 
             except Exception as e:
-                print(f"Draw error for {icao}: {e}")
-                print(x, y)
+                log.error(f"Draw error for {icao} at x={x} y={y}: {e}")
         
         with data_lock:
             plane_rects = current_plane_rects
@@ -1820,6 +1830,7 @@ def main():
             draw_text.center(window, placeholder_text, text_font1, (100, 100, 100), picture_holder_rect.centerx, picture_holder_rect.centery - 8)
 
         image_prediction_y = 385
+        spacing = 18
         meta_label = camera_photo_meta.get('label', 'UNKNOWN')
         meta_confidence = camera_photo_meta.get('confidence', '-')
         meta_raw_score = camera_photo_meta.get('raw_score', '-')
@@ -1852,9 +1863,20 @@ def main():
         with data_lock:
             prune_history(directional_hit_history, DIRECTIONAL_HISTORY_SECONDS, current_time)
             directional_plot_history = [(timestamp, counts.copy()) for timestamp, counts in directional_hit_history]
-        draw_polar_coverage_plot(window, polar_plot_rect, directional_plot_history, draw_text, text_font3, graph_time_font, pygame, current_time, DIRECTIONAL_HISTORY_SECONDS, DIRECTIONAL_SECTOR_COUNT)
+
+        draw_polar_coverage_plot(
+            window, polar_plot_rect, directional_plot_history, draw_text, text_font3, graph_time_font, 
+            pygame, current_time, DIRECTIONAL_HISTORY_SECONDS, DIRECTIONAL_SECTOR_COUNT
+        )
         #FILTERS
-        draw_altitude_filter(window, filter_panel_rect, filter_checkbox_rect, slider_track_rect, filter_slider_handle_rect, altitude_slider_up_rect, altitude_slider_down_rect, altitude_filter_threshold, altitude_filter_above, distance_filter_checkbox_rect, distance_slider_track_rect, distance_filter_slider_handle_rect, distance_slider_up_rect, distance_slider_down_rect, distance_filter_threshold_km, distance_filter_outside, distance_unit, distance_unit_rects, draw_text, stat_font, graph_time_font, text_font3, pygame)
+        draw_altitude_filter(
+            window, filter_panel_rect, filter_checkbox_rect, slider_track_rect, 
+            filter_slider_handle_rect, altitude_slider_up_rect, altitude_slider_down_rect, 
+            altitude_filter_threshold, altitude_filter_above, distance_filter_checkbox_rect, 
+            distance_slider_track_rect, distance_filter_slider_handle_rect, distance_slider_up_rect, 
+            distance_slider_down_rect, distance_filter_threshold_km, distance_filter_outside, 
+            distance_unit, distance_unit_rects, draw_text, stat_font, graph_time_font, text_font3, pygame
+        )
         filter_button_icons = {
             'heatmap_on': heatmap_on_icon,
             'heatmap_off': heatmap_off_icon,
@@ -1863,7 +1885,11 @@ def main():
             'hide_plane': hide_plane_mode_icon,
             'clear_filters': clear_filters_icon,
         }
-        draw_filter_action_buttons(window, heatmap_button_rect, hide_planes_button_rect, reset_filters_button_rect, radar_heatmap_enabled, hide_planes_mode, filter_button_icons, pygame)
+        draw_filter_action_buttons(
+            window, heatmap_button_rect, hide_planes_button_rect, 
+            reset_filters_button_rect, radar_heatmap_enabled, 
+            hide_planes_mode, filter_button_icons, pygame
+        )
         
         y_msg = logs_y + 10
         with data_lock:
