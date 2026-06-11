@@ -13,4 +13,5 @@ stats_history/
 #GUI elements
 /textures
 
-
+#Log files
+*.log
