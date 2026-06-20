@@ -1,0 +1,386 @@
+readsb diagnostic — 2026-06-20 22:17:52
+Source: /run/readsb/aircraft.json
+
+============================================================
+TEST: Top-level JSON structure
+============================================================
+Top-level keys: ['now', 'messages', 'aircraft']
+Aircraft count: 43
+
+============================================================
+TEST: All aircraft keys
+============================================================
+All keys seen across all aircraft:
+  alert
+  alt_baro
+  alt_geom
+  baro_rate
+  category
+  emergency
+  flight
+  geom_rate
+  gpsOkBefore
+  gpsOkLat
+  gpsOkLon
+  gs
+  gva
+  hex
+  ias
+  lastPosition
+  lat
+  lon
+  mach
+  mag_heading
+  messages
+  mlat
+  nac_p
+  nac_v
+  nav_altitude_fms
+  nav_altitude_mcp
+  nav_heading
+  nav_modes
+  nav_qnh
+  nic
+  nic_baro
+  oat
+  rc
+  roll
+  rssi
+  sda
+  seen
+  seen_pos
+  sil
+  sil_type
+  spi
+  squawk
+  tas
+  tat
+  tisb
+  track
+  track_rate
+  true_heading
+  type
+  version
+  wd
+  ws
+
+============================================================
+TEST: flight / callsign field per aircraft
+============================================================
+  407cb2    flight='RUK69PG '            callsign='<missing>'
+  40643b    flight='EZY8543 '            callsign='<missing>'
+  40753c    flight='EXS124  '            callsign='<missing>'
+  ac3c0e    flight='FDX5035 '            callsign='<missing>'
+  40095d    flight='SHT6U   '            callsign='<missing>'
+  4cae8d    flight='RYR17FZ '            callsign='<missing>'
+  408026    flight='TOM3HT  '            callsign='<missing>'
+  408040    flight='TOM63B  '            callsign='<missing>'
+  4cae92    flight='RYR3LP  '            callsign='<missing>'
+  4ac9e4    flight='SAS1818 '            callsign='<missing>'
+  4cac7f    flight='RYR4PY  '            callsign='<missing>'
+  40104f    flight='EXS94DL '            callsign='<missing>'
+  407180    flight='EXS27VY '            callsign='<missing>'
+  408124    flight='EXS22TL '            callsign='<missing>'
+  40631a    flight='EZY45MC '            callsign='<missing>'
+  406591    flight='BAW63   '            callsign='<missing>'
+  06a13a    flight='QTR1R   '            callsign='<missing>'
+  407fea    flight='WUK4DF  '            callsign='<missing>'
+  408041    flight='WUK731Q '            callsign='<missing>'
+  406d7a    flight='BAW33   '            callsign='<missing>'
+  4bb069    flight='THY2RK  '            callsign='<missing>'
+  4cade0    flight='RYR22MB '            callsign='<missing>'
+  4080e4    flight='BAW465M '            callsign='<missing>'
+  4bb26a    flight='THY70G  '            callsign='<missing>'
+  4d207f    flight='VJT732  '            callsign='<missing>'
+  4d2420    flight='WMT6WW  '            callsign='<missing>'
+  406133    flight='EZY13FR '            callsign='<missing>'
+  4080f7    flight='EZY81YX '            callsign='<missing>'
+  408228    flight='BAW543Q '            callsign='<missing>'
+  781915    flight='CSN304  '            callsign='<missing>'
+  407fcb    flight='BAW33A  '            callsign='<missing>'
+  896111    flight='UAE232  '            callsign='<missing>'
+  40690a    flight='EZY76XB '            callsign='<missing>'
+  407d5c    flight='WUK7402 '            callsign='<missing>'
+  4d234d    flight='RYR4CB  '            callsign='<missing>'
+  400f9a    flight='BAW355  '            callsign='<missing>'
+  aaa6e4    flight='AVA121  '            callsign='<missing>'
+  06a0ea    flight='QTR1V   '            callsign='<missing>'
+  4cafc3    flight='<missing>'           callsign='<missing>'
+  407fc9    flight='BAW890  '            callsign='<missing>'
+  39e698    flight='<missing>'           callsign='<missing>'
+  4cad3f    flight='<missing>'           callsign='<missing>'
+  407462    flight='<missing>'           callsign='<missing>'
+
+============================================================
+TEST: Raw dump of first 5 aircraft
+============================================================
+{'alert': 0,
+ 'alt_baro': 36000,
+ 'alt_geom': 37275,
+ 'baro_rate': 0,
+ 'category': 'A3',
+ 'flight': 'RUK69PG ',
+ 'geom_rate': 0,
+ 'gs': 415.5,
+ 'hex': '407cb2',
+ 'ias': 257,
+ 'lat': 53.066574,
+ 'lon': -1.78894,
+ 'mach': 0.776,
+ 'mag_heading': 304.98,
+ 'messages': 9050,
+ 'mlat': [],
+ 'nac_p': 8,
+ 'nac_v': 1,
+ 'nav_altitude_fms': 36000,
+ 'nav_altitude_mcp': 36000,
+ 'nav_heading': 305.86,
+ 'nav_qnh': 1013.6,
+ 'nic': 7,
+ 'nic_baro': 1,
+ 'rc': 371,
+ 'roll': 0.18,
+ 'rssi': -34.4,
+ 'seen': 0.5,
+ 'seen_pos': 3.495,
+ 'sil': 3,
+ 'sil_type': 'perhour',
+ 'spi': 0,
+ 'squawk': '5160',
+ 'tas': 448,
+ 'tisb': [],
+ 'track': 309.63,
+ 'track_rate': 0.0,
+ 'true_heading': 305.48,
+ 'type': 'adsb_icao',
+ 'version': 2}
+---
+{'alert': 0,
+ 'alt_baro': 23525,
+ 'alt_geom': 24775,
+ 'baro_rate': 1920,
+ 'category': 'A3',
+ 'flight': 'EZY8543 ',
+ 'geom_rate': 1888,
+ 'gs': 378.6,
+ 'hex': '40643b',
+ 'ias': 284,
+ 'lat': 50.868422,
+ 'lon': -1.434708,
+ 'mach': 0.66,
+ 'mag_heading': 216.56,
+ 'messages': 7492,
+ 'mlat': [],
+ 'nac_p': 9,
+ 'nac_v': 1,
+ 'nav_altitude_mcp': 35008,
+ 'nav_heading': 0.0,
+ 'nav_qnh': 1013.6,
+ 'nic': 8,
+ 'nic_baro': 1,
+ 'oat': -21,
+ 'rc': 186,
+ 'roll': 0.35,
+ 'rssi': -33.1,
+ 'seen': 13.1,
+ 'seen_pos': 13.135,
+ 'sil': 3,
+ 'sil_type': 'perhour',
+ 'spi': 0,
+ 'squawk': '0535',
+ 'tas': 406,
+ 'tat': 1,
+ 'tisb': [],
+ 'track': 213.14,
+ 'track_rate': 0.0,
+ 'true_heading': 217.33,
+ 'type': 'adsb_icao',
+ 'version': 2}
+---
+{'alert': 0,
+ 'alt_baro': 35000,
+ 'alt_geom': 36375,
+ 'baro_rate': 0,
+ 'category': 'A3',
+ 'emergency': 'none',
+ 'flight': 'EXS124  ',
+ 'geom_rate': -32,
+ 'gs': 431.8,
+ 'gva': 2,
+ 'hex': '40753c',
+ 'ias': 252,
+ 'lat': 52.412327,
+ 'lon': -1.426967,
+ 'mach': 0.744,
+ 'mag_heading': 341.37,
+ 'messages': 25292,
+ 'mlat': [],
+ 'nac_p': 9,
+ 'nac_v': 1,
+ 'nav_altitude_fms': 35008,
+ 'nav_altitude_mcp': 35008,
+ 'nav_heading': 341.72,
+ 'nav_qnh': 1013.6,
+ 'nic': 8,
+ 'nic_baro': 1,
+ 'oat': -51,
+ 'rc': 186,
+ 'roll': -0.35,
+ 'rssi': -32.6,
+ 'sda': 2,
+ 'seen': 0.7,
+ 'seen_pos': 1.142,
+ 'sil': 3,
+ 'sil_type': 'perhour',
+ 'spi': 0,
+ 'squawk': '5322',
+ 'tas': 432,
+ 'tat': -27,
+ 'tisb': [],
+ 'track': 347.15,
+ 'track_rate': 0.0,
+ 'true_heading': 342.0,
+ 'type': 'adsb_icao',
+ 'version': 2,
+ 'wd': 255,
+ 'ws': 38}
+---
+{'alert': 0,
+ 'alt_baro': 34000,
+ 'alt_geom': 35275,
+ 'baro_rate': 0,
+ 'category': 'A5',
+ 'emergency': 'none',
+ 'flight': 'FDX5035 ',
+ 'geom_rate': 0,
+ 'gs': 441.0,
+ 'gva': 2,
+ 'hex': 'ac3c0e',
+ 'ias': 288,
+ 'lat': 52.777762,
+ 'lon': -1.372663,
+ 'mach': 0.828,
+ 'mag_heading': 298.3,
+ 'messages': 23674,
+ 'mlat': [],
+ 'nac_p': 11,
+ 'nac_v': 2,
+ 'nav_altitude_mcp': 34016,
+ 'nav_heading': 317.11,
+ 'nav_qnh': 1012.8,
+ 'nic': 8,
+ 'nic_baro': 1,
+ 'oat': -50,
+ 'rc': 186,
+ 'roll': -0.18,
+ 'rssi': -29.5,
+ 'sda': 2,
+ 'seen': 0.1,
+ 'seen_pos': 0.086,
+ 'sil': 3,
+ 'sil_type': 'perhour',
+ 'spi': 0,
+ 'squawk': '7562',
+ 'tas': 482,
+ 'tat': -19,
+ 'tisb': [],
+ 'track': 301.74,
+ 'true_heading': 298.92,
+ 'type': 'adsb_icao',
+ 'version': 2,
+ 'wd': 271,
+ 'ws': 46}
+---
+{'alert': 0,
+ 'alt_baro': 25675,
+ 'alt_geom': 26875,
+ 'baro_rate': 1152,
+ 'category': 'A3',
+ 'emergency': 'none',
+ 'flight': 'SHT6U   ',
+ 'geom_rate': 1184,
+ 'gs': 474.1,
+ 'gva': 2,
+ 'hex': '40095d',
+ 'ias': 322,
+ 'lat': 52.670738,
+ 'lon': -1.362932,
+ 'mach': 0.776,
+ 'mag_heading': 334.16,
+ 'messages': 12655,
+ 'mlat': [],
+ 'nac_p': 9,
+ 'nac_v': 1,
+ 'nav_altitude_mcp': 30016,
+ 'nav_qnh': 1012.8,
+ 'nic': 8,
+ 'nic_baro': 1,
+ 'oat': -27,
+ 'rc': 186,
+ 'roll': -0.35,
+ 'rssi': -32.0,
+ 'sda': 3,
+ 'seen': 0.5,
+ 'seen_pos': 3.242,
+ 'sil': 3,
+ 'sil_type': 'perhour',
+ 'spi': 0,
+ 'squawk': '7647',
+ 'tas': 474,
+ 'tat': 2,
+ 'tisb': [],
+ 'track': 337.82,
+ 'track_rate': 0.0,
+ 'true_heading': 334.8,
+ 'type': 'adsb_icao',
+ 'version': 2,
+ 'wd': 246,
+ 'ws': 24}
+---
+
+============================================================
+TEST: Aircraft with non-empty 'flight' field
+============================================================
+39/43 aircraft have a non-empty 'flight' field.
+  407cb2    flight='RUK69PG '
+  40643b    flight='EZY8543 '
+  40753c    flight='EXS124  '
+  ac3c0e    flight='FDX5035 '
+  40095d    flight='SHT6U   '
+  4cae8d    flight='RYR17FZ '
+  408026    flight='TOM3HT  '
+  408040    flight='TOM63B  '
+  4cae92    flight='RYR3LP  '
+  4ac9e4    flight='SAS1818 '
+  4cac7f    flight='RYR4PY  '
+  40104f    flight='EXS94DL '
+  407180    flight='EXS27VY '
+  408124    flight='EXS22TL '
+  40631a    flight='EZY45MC '
+  406591    flight='BAW63   '
+  06a13a    flight='QTR1R   '
+  407fea    flight='WUK4DF  '
+  408041    flight='WUK731Q '
+  406d7a    flight='BAW33   '
+  4bb069    flight='THY2RK  '
+  4cade0    flight='RYR22MB '
+  4080e4    flight='BAW465M '
+  4bb26a    flight='THY70G  '
+  4d207f    flight='VJT732  '
+  4d2420    flight='WMT6WW  '
+  406133    flight='EZY13FR '
+  4080f7    flight='EZY81YX '
+  408228    flight='BAW543Q '
+  781915    flight='CSN304  '
+  407fcb    flight='BAW33A  '
+  896111    flight='UAE232  '
+  40690a    flight='EZY76XB '
+  407d5c    flight='WUK7402 '
+  4d234d    flight='RYR4CB  '
+  400f9a    flight='BAW355  '
+  aaa6e4    flight='AVA121  '
+  06a0ea    flight='QTR1V   '
+  407fc9    flight='BAW890  '
+
+============================================================
+Done.

@@ -1,2 +1,21 @@
-# Created by venv; see https://docs.python.org/3/library/venv.html
-*
+#Useless
+.DS_Store
+__pycache__
+/py_cache
+.vscode
+
+#.csv flight history
+stats_history/
+
+#Config files
+/config/config.yml
+firebase.json
+
+#virtual environemnt
+/venv/
+
+#GUI elements
+/textures
+
+#Log files
+*.log
