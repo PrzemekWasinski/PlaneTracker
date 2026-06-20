@@ -258,6 +258,14 @@ def add_message(message):
             message_queue.pop(0)
 
 
+def truncate_log_text(text, font, max_width):
+    if font.size(text)[0] <= max_width:
+        return text
+    while text and font.size(text + '…')[0] > max_width:
+        text = text[:-1]
+    return text + '…'
+
+
 def clone_plane_data_for_ui(plane_data):
     snapshot = dict(plane_data)
 
@@ -950,7 +958,7 @@ def main():
         pic_h = 203
         logs_y = pic_y + pic_h + 10
         logs_h = (height - 50) - logs_y - 10
-        filter_panel_rect = pygame.Rect(SIDEBAR_X + (SIDEBAR_WIDTH // 2) + 10, logs_y + 215, int(SIDEBAR_WIDTH / 2 - 20), int(logs_h // 2))
+        filter_panel_rect = pygame.Rect(SIDEBAR_X + (SIDEBAR_WIDTH // 2) + 5, logs_y + 215, int(SIDEBAR_WIDTH / 2) - 5, int(logs_h // 2))
         heatmap_button_rect = pygame.Rect(filter_panel_rect.right - 48, filter_panel_rect.top + 8, 40, 40)
         hide_planes_button_rect = pygame.Rect(filter_panel_rect.right - 48, filter_panel_rect.top + 56, 40, 40)
         reset_filters_button_rect = pygame.Rect(filter_panel_rect.right - 48, filter_panel_rect.top + 104, 40, 40)
@@ -1560,13 +1568,6 @@ def main():
         sys_y = 85
         col1 = SIDEBAR_X + 10
         col2 = SIDEBAR_X + SIDEBAR_WIDTH // 2 - 250
-        draw_text.normal(window, "Controller:", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 590)
-
-        draw_text.normal(window, f"TEMP:{round(cpu_temp)}C", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 610)
-        draw_text.normal(window, f"RAM:{ram_percentage}%", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 630)
-        draw_text.normal(window, f"CPU:{cpu_percentage}%", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 650)
-        draw_text.normal(window, f"DISK:{disk_free}GB", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 670)  
-
         with data_lock:
             tracker_stats_snapshot = dict(tracker_device_stats)
 
@@ -1574,13 +1575,6 @@ def main():
         tracker_ram_text = f"RAM:{round(tracker_stats_snapshot['ram'])}%" if tracker_stats_snapshot['ram'] is not None else "RAM: N/A"
         tracker_cpu_text = f"CPU:{round(tracker_stats_snapshot['cpu'])}%" if tracker_stats_snapshot['cpu'] is not None else "CPU: N/A"
         tracker_disk_text = f"DISK:{round(tracker_stats_snapshot['disk'], 1)}GB" if tracker_stats_snapshot['disk'] is not None else "DISK: N/A"
-
-        draw_text.normal(window, "Tracker:", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 700)
-        draw_text.normal(window, tracker_temp_text, stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 720)
-        draw_text.normal(window, tracker_ram_text, stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 740)
-        draw_text.normal(window, tracker_cpu_text, stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 760)
-        draw_text.normal(window, tracker_disk_text, stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 10, 780)
-
 
         api_status_connected = (not offline) and network_available and any(
             display_data.get("plane_data", {}).get('manufacturer', '-') != '-'
@@ -1591,15 +1585,6 @@ def main():
         api_status_colour = (0, 255, 0) if api_status_connected else (255, 0, 0)
         internet_status_colour = (0, 255, 0) if internet_status_connected else (255, 0, 0)
         tracker_status_colour = (0, 255, 0) if tracker_status_connected else (255, 0, 0)
-
-        draw_text.normal(window, "API", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 155, 590)
-        pygame.draw.circle(window, api_status_colour, (SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 190, 600), 5)
-
-        draw_text.normal(window, "Internet", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 115, 610)
-        pygame.draw.circle(window, internet_status_colour, (SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 190, 620), 5)
-
-        draw_text.normal(window, "Tracker", stat_font, (255, 255, 255), SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 122, 630)
-        pygame.draw.circle(window, tracker_status_colour, (SIDEBAR_X + (SIDEBAR_WIDTH / 2) + 190, 640), 5)
 
 
 
@@ -1688,10 +1673,10 @@ def main():
             draw_text.normal(window, model_display, plane_identity_font, (255, 255, 255), col1, id_y)
             draw_text.normal(window, owner_display, plane_identity_font, (255, 255, 255), col1, id_y + 16)
 
-            stat_y = id_y + 42
+            spacing = 18
+            stat_y = 290
             lx = col1
             rx = col2
-            spacing = 18
 
             def rnd(val, dec=1):
                 try: return round(float(val), dec)
@@ -1718,92 +1703,15 @@ def main():
         else:
             draw_text.center(window, "NO PLANE SELECTED", text_font1, (100, 100, 100), SIDEBAR_X + SIDEBAR_WIDTH // 2, separator_y + 80)
 
-        #Picture Section
-        pic_y = 377
-        pic_h = 203
-        pic_x = SIDEBAR_X + 5
-        pic_w = SIDEBAR_WIDTH - 15
-        pygame.draw.rect(window, (100, 100, 100), (pic_x, pic_y, pic_w, pic_h), 1)
+        #LOGS BOX
+        logs_y = altitude_graph_rect.bottom + 5
+        logs_h = filter_panel_rect.top - logs_y - 5
+        pygame.draw.rect(window, (20, 20, 20), (filter_panel_rect.left, logs_y, filter_panel_rect.width, logs_h), 0)
+        pygame.draw.rect(window, (100, 100, 100), (filter_panel_rect.left, logs_y, filter_panel_rect.width, logs_h), 1)
 
-        #Picture holder
-        picture_holder_rect = pygame.Rect(pic_x, pic_y, 271, 203)
-        pygame.draw.rect(window, (20, 20, 20), picture_holder_rect, 0)
-        pygame.draw.rect(window, (100, 100, 100), picture_holder_rect, 1)
-
-        with data_lock:
-            camera_busy = tracker_capture_in_progress
-            latest_camera_photo_surface = tracker_photo_surface
-            latest_camera_photo_meta = dict(tracker_photo_meta)
-            target_camera_photo_surface = tracker_plane_photo_cache.get(target_icao) if target_icao else None
-            target_camera_photo_meta = dict(tracker_plane_photo_meta_cache.get(target_icao, {})) if target_icao else {}
-            selected_camera_photo_surface = tracker_plane_photo_cache.get(selected_plane_icao) if selected_plane_icao else None
-            selected_camera_photo_meta = dict(tracker_plane_photo_meta_cache.get(selected_plane_icao, {})) if selected_plane_icao else {}
-
-        if target_camera_photo_surface is not None:
-            camera_photo_surface = target_camera_photo_surface
-            camera_photo_meta = target_camera_photo_meta
-        elif selected_camera_photo_surface is not None:
-            camera_photo_surface = selected_camera_photo_surface
-            camera_photo_meta = selected_camera_photo_meta
-        elif target_icao or selected_plane_icao:
-            camera_photo_surface = None
-            camera_photo_meta = {}
-        else:
-            camera_photo_surface = latest_camera_photo_surface
-            camera_photo_meta = latest_camera_photo_meta
-
-        if camera_photo_surface is not None:
-            inner_rect = picture_holder_rect.inflate(-6, -6)
-            image_width, image_height = camera_photo_surface.get_size()
-            if image_width > 0 and image_height > 0:
-                scale = min(inner_rect.width / image_width, inner_rect.height / image_height)
-                scaled_size = (max(1, int(image_width * scale)), max(1, int(image_height * scale)))
-                scaled_surface = pygame.transform.smoothscale(camera_photo_surface, scaled_size)
-                scaled_rect = scaled_surface.get_rect(center=picture_holder_rect.center)
-                window.blit(scaled_surface, scaled_rect)
-        else:
-            placeholder_text = 'CAMERA BUSY' if camera_busy else 'NO IMAGE'
-            draw_text.center(window, placeholder_text, text_font1, (100, 100, 100), picture_holder_rect.centerx, picture_holder_rect.centery - 8)
-
-        image_prediction_y = 385
-        spacing = 18
-        meta_label = camera_photo_meta.get('label', 'UNKNOWN')
-        meta_confidence = camera_photo_meta.get('confidence', '-')
-        meta_raw_score = camera_photo_meta.get('raw_score', '-')
-        meta_score_margin = camera_photo_meta.get('score_margin', '-')
-        meta_mode = camera_photo_meta.get('mode', '-')
-        meta_pan = camera_photo_meta.get('pan', '-')
-        meta_tilt = camera_photo_meta.get('tilt', '-')
-        meta_bearing = camera_photo_meta.get('bearing_deg', '-')
-        meta_elev = camera_photo_meta.get('elev_deg', '-')
-        camera_state = 'BUSY' if camera_busy else ('FREE' if tracker_status_connected else 'OFFLINE')
-        draw_text.normal(window, f"STATUS: {camera_state}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y)    
-        draw_text.normal(window, f"LABEL: {meta_label}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing)   
-        draw_text.normal(window, f"CONF: {meta_confidence}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 2)  
-        draw_text.normal(window, f"RAW: {meta_raw_score}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 3)  
-        draw_text.normal(window, f"MARGIN: {meta_score_margin}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 4)  
-        draw_text.normal(window, f"MODE: {meta_mode}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 5) 
-        draw_text.normal(window, f"PAN: {meta_pan}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 6) 
-        draw_text.normal(window, f"TILT: {meta_tilt}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 7) 
-        draw_text.normal(window, f"BRG: {meta_bearing}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 8) 
-        draw_text.normal(window, f"ELEV: {meta_elev}", stat_font, (255, 255, 255), SIDEBAR_X + 285, image_prediction_y + spacing * 9)  
-
-        #LOGS BOX 
-        logs_y = pic_y + pic_h + 10
-        logs_h = (height - 50) - logs_y - 10
-        pygame.draw.rect(window, (20, 20, 20), (SIDEBAR_X+5, logs_y, (SIDEBAR_WIDTH / 2) - 5, logs_h), 0)
-        pygame.draw.rect(window, (100, 100, 100), (SIDEBAR_X+5, logs_y, (SIDEBAR_WIDTH / 2) - 5, logs_h), 1)
-
-        #Polar plot
-        polar_plot_rect = pygame.Rect(SIDEBAR_X + (SIDEBAR_WIDTH // 2) + 200, logs_y, 205, 205)
         with data_lock:
             prune_history(directional_hit_history, DIRECTIONAL_HISTORY_SECONDS, current_time)
             directional_plot_history = [(timestamp, counts.copy()) for timestamp, counts in directional_hit_history]
-
-        draw_polar_coverage_plot(
-            window, polar_plot_rect, directional_plot_history, draw_text, text_font3, graph_time_font, 
-            pygame, current_time, DIRECTIONAL_HISTORY_SECONDS, DIRECTIONAL_SECTOR_COUNT
-        )
         #FILTERS
         draw_altitude_filter(
             window, filter_panel_rect, filter_checkbox_rect, slider_track_rect, 
@@ -1822,20 +1730,56 @@ def main():
             'clear_filters': clear_filters_icon,
         }
         draw_filter_action_buttons(
-            window, heatmap_button_rect, hide_planes_button_rect, 
-            reset_filters_button_rect, radar_heatmap_enabled, 
+            window, heatmap_button_rect, hide_planes_button_rect,
+            reset_filters_button_rect, radar_heatmap_enabled,
             hide_planes_mode, filter_button_icons, pygame
         )
-        
+
+        #INFO BOX — polar plot + system stats
+        info_box_rect = pygame.Rect(SIDEBAR_X + 5, filter_panel_rect.top, int((SIDEBAR_WIDTH / 2) - 5), filter_panel_rect.height)
+        pygame.draw.rect(window, (20, 20, 20), info_box_rect, 0)
+        pygame.draw.rect(window, (100, 100, 100), info_box_rect, 1)
+
+        polar_size = info_box_rect.height
+        polar_plot_rect = pygame.Rect(info_box_rect.right - polar_size, info_box_rect.top, polar_size, polar_size)
+        draw_polar_coverage_plot(
+            window, polar_plot_rect, directional_plot_history, draw_text, text_font3, graph_time_font,
+            pygame, current_time, DIRECTIONAL_HISTORY_SECONDS, DIRECTIONAL_SECTOR_COUNT
+        )
+
+        sx = info_box_rect.left + 8
+        sy = info_box_rect.top + 3
+        sp = 15
+
+        draw_text.normal(window, "Controller:", stat_font, (255, 255, 255), sx, sy)
+        draw_text.normal(window, f"TEMP:{round(cpu_temp)}C", stat_font, (255, 255, 255), sx, sy + sp)
+        draw_text.normal(window, f"RAM:{ram_percentage}%", stat_font, (255, 255, 255), sx, sy + sp * 2)
+        draw_text.normal(window, f"CPU:{cpu_percentage}%", stat_font, (255, 255, 255), sx, sy + sp * 3)
+        draw_text.normal(window, f"DISK:{disk_free}GB", stat_font, (255, 255, 255), sx, sy + sp * 4)
+        draw_text.normal(window, "Camera:", stat_font, (255, 255, 255), sx, sy + sp * 5 + 5)
+        draw_text.normal(window, tracker_temp_text, stat_font, (255, 255, 255), sx, sy + sp * 6 + 5)
+        draw_text.normal(window, tracker_ram_text, stat_font, (255, 255, 255), sx, sy + sp * 7 + 5)
+        draw_text.normal(window, tracker_cpu_text, stat_font, (255, 255, 255), sx, sy + sp * 8 + 5)
+        draw_text.normal(window, tracker_disk_text, stat_font, (255, 255, 255), sx, sy + sp * 9 + 5)
+
+        dot_y = sy + sp * 10 + 10
+        pygame.draw.circle(window, api_status_colour, (sx + 5, dot_y + 9), 5)
+        draw_text.normal(window, "API", stat_font, (255, 255, 255), sx + 14, dot_y)
+        pygame.draw.circle(window, internet_status_colour, (sx + 5, dot_y + sp + 9), 5)
+        draw_text.normal(window, "Internet", stat_font, (255, 255, 255), sx + 14, dot_y + sp)
+        pygame.draw.circle(window, tracker_status_colour, (sx + 5, dot_y + sp * 2 + 9), 5)
+        draw_text.normal(window, "Camera", stat_font, (255, 255, 255), sx + 14, dot_y + sp * 2)
+
+        log_max_w = filter_panel_rect.width - 10
         y_msg = logs_y + 10
         with data_lock:
             for message in message_queue[-50:]:
                 colour = (200, 200, 200)
-                if "WARNING" in message: 
+                if "WARNING" in message:
                     colour = (255, 0, 0)
-                elif "NEW" in message: 
+                elif "NEW" in message:
                     colour = (0, 255, 0)
-                draw_text.normal(window, str(message), text_font3, colour, col1 + 5, y_msg)
+                draw_text.normal(window, truncate_log_text(str(message), text_font3, log_max_w), text_font3, colour, filter_panel_rect.left + 5, y_msg)
                 y_msg += 11
                 if y_msg > logs_y + logs_h - 10: 
                     break
