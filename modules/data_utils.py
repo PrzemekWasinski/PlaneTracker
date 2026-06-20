@@ -9,41 +9,77 @@ from time import localtime, strftime
 from .core_utils import calculate_distance, clean_string
 
 
-def split_message(message):
-    plane_info = message.split(',')
-
-    if len(plane_info) < 15 or plane_info[0] != 'MSG':
+def parse_aircraft(aircraft):
+    hex_code = aircraft.get("hex", "").upper().strip()
+    if not hex_code:
         return None
 
-    try:
-        lat = float(plane_info[14])
-        lon = float(plane_info[15])
-    except (ValueError, IndexError):
-        lat = '-'
-        lon = '-'
+    lat = aircraft.get("lat")
+    lon = aircraft.get("lon")
+    if lat is None or lon is None:
+        lat = "-"
+        lon = "-"
+    else:
+        try:
+            lat = float(lat)
+            lon = float(lon)
+        except (TypeError, ValueError):
+            lat = "-"
+            lon = "-"
 
-    try:
-        altitude = int(plane_info[11])
-    except (ValueError, IndexError):
-        altitude = '-'
+    altitude = aircraft.get("alt_baro")
+    if altitude is None:
+        altitude = aircraft.get("alt_geom")
+    if altitude is not None:
+        try:
+            altitude = int(altitude)
+        except (TypeError, ValueError):
+            altitude = "-"
+    else:
+        altitude = "-"
 
-    try:
-        speed = float(plane_info[12])
-    except (ValueError, IndexError):
-        speed = '-'
+    speed = aircraft.get("gs")
+    if speed is not None:
+        try:
+            speed = float(speed)
+        except (TypeError, ValueError):
+            speed = "-"
+    else:
+        speed = "-"
 
-    try:
-        track = float(plane_info[13])
-    except (ValueError, IndexError):
-        track = '-'
+    track = aircraft.get("track")
+    if track is not None:
+        try:
+            track = float(track)
+        except (TypeError, ValueError):
+            track = "-"
+    else:
+        track = "-"
+
+    flight = aircraft.get("flight", "-")
+    if flight is not None:
+        flight = str(flight).strip() or "-"
+    else:
+        flight = "-"
+
+    baro_rate = aircraft.get("baro_rate")
+    if baro_rate is not None:
+        try:
+            baro_rate = int(baro_rate)
+        except (TypeError, ValueError):
+            baro_rate = "-"
+    else:
+        baro_rate = "-"
 
     return {
-        'icao': plane_info[4] or '-',
+        'icao': hex_code,
         'altitude': altitude,
         'speed': speed,
         'track': track,
         'lat': lat,
         'lon': lon,
+        'flight': flight,
+        'baro_rate': baro_rate,
         'manufacturer': '-',
         'registration': '-',
         'icao_type_code': '-',
@@ -51,7 +87,7 @@ def split_message(message):
         'operator_flag': '-',
         'owner': '-',
         'model': '-',
-        'spotted_at': datetime.now().strftime('%H:%M:%S') or '-',
+        'spotted_at': datetime.now().strftime('%H:%M:%S'),
         'last_update_time': time.time(),
     }
 

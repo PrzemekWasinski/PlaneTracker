@@ -1,17 +1,2 @@
-#Useless
-.DS_Store
-__pycache__
-/py_cache
-.vscode
-
-#.csv flight history
-stats_history/
-
-#Config files
-/config/config.yml
-
-#GUI elements
-/textures
-
-#Log files
-*.log
+# Created by venv; see https://docs.python.org/3/library/venv.html
+*

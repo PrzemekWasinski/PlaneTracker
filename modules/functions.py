@@ -9,7 +9,7 @@ from .core_utils import (
     restart_script,
     save_config,
 )
-from .data_utils import get_stats, split_message
+from .data_utils import get_stats, parse_aircraft
 from .network_utils import connect
 
 __all__ = [
@@ -22,7 +22,7 @@ __all__ = [
     'get_disk_free',
     'get_stats',
     'load_config',
+    'parse_aircraft',
     'restart_script',
     'save_config',
-    'split_message',
 ]

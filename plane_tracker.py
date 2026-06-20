@@ -1,3 +1,4 @@
+import json
 import socket
 import time
 import io
@@ -37,11 +38,9 @@ from modules.ui_utils import draw_altitude_filter, draw_filter_action_buttons, d
 _config = functions.load_config()
 _config.setdefault('cameraHost', '192.168.0.157')
 _config.setdefault('cameraPort', 12345)
-_config.setdefault('adsbHost', '127.0.0.1')
-_config.setdefault('adsbPort', 30003)
 
 CAMERA_SERVER = (_config['cameraHost'], int(_config['cameraPort']))
-ADSB_SERVER = (_config['adsbHost'], int(_config['adsbPort']))
+READSB_JSON_PATH = "/run/readsb/aircraft.json"
 
 #Initialize Firebase
 if not firebase_admin._apps:
@@ -659,16 +658,14 @@ def build_auto_track_rect(range_km, centre_lat, centre_lon):
 #THREAD 2: ADSB Data Processing
 def adsb_processing_thread():
     global is_receiving, is_processing, tracker_running, offline, network_available
-    
+
     last_stats_upload = time.time()
     last_network_check = time.time()
-    
-    sock = None
-    recv_buffer = ""
-    
+    readsb_connected = False
+
     while tracker_running:
         current_time = time.time()
-        
+
         #Check network every 30 seconds
         if current_time - last_network_check > 30:
             network_available = check_network()
@@ -676,38 +673,19 @@ def adsb_processing_thread():
                 add_message("Network down switching to Offline")
             last_network_check = current_time
 
-        #Ensure we have a socket connection
-        if sock is None:
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(2)
-                sock.connect(ADSB_SERVER)
-                recv_buffer = ""
-                add_message(f"Connected to Antenna at {ADSB_SERVER[0]}:{ADSB_SERVER[1]}")
-            except Exception as e:
-                add_message(format_service_connection_error('Antenna', ADSB_SERVER, e))
-                sock = None
-                time.sleep(3)
-                continue
-
         is_receiving = True
         try:
-            #Use short read timeout to keep loop responsive
-            sock.settimeout(0.5)
-            data = sock.recv(4096)
-            if not data:
-                add_message("Reconnecting with antenna...")
-                sock.close()
-                sock = None
-                recv_buffer = ""
-                continue
-                
-            recv_buffer += data.decode(errors="ignore")
-            lines = recv_buffer.split("\n")
-            recv_buffer = lines.pop() if lines else ""
-            
-            for line in lines:
-                plane_data = functions.split_message(line)
+            with open(READSB_JSON_PATH, "r") as f:
+                data = json.load(f)
+
+            if not readsb_connected:
+                add_message(f"Connected to readsb at {READSB_JSON_PATH}")
+                readsb_connected = True
+
+            aircraft_list = data.get("aircraft", [])
+
+            for aircraft in aircraft_list:
+                plane_data = functions.parse_aircraft(aircraft)
                 if not plane_data or plane_data["lon"] == "-" or plane_data["lat"] == "-":
                     continue
 
@@ -728,7 +706,7 @@ def adsb_processing_thread():
                             plane_data["prev_lon"] = cached["last_lon"]
                             plane_data["prev_update_time"] = cached.get("last_update_time")
                             plane_data["prev_altitude"] = cached.get("altitude")
-                        
+
                         #Preserve existing location_history
                         plane_data["location_history"] = cached.get("location_history", {})
                         plane_data["altitude_history"] = cached.get("altitude_history", deque())
@@ -787,7 +765,7 @@ def adsb_processing_thread():
                         plane_data["last_hit_count"] = 1
                     plane_data["total_hit_count"] = plane_data.get("total_hit_count", 0) + 1
                     prune_history(plane_data["hit_history"], PLANE_GRAPH_HISTORY_SECONDS, current_epoch)
-                    
+
                     active_planes[icao] = plane_data
                     displayed_planes[icao] = {
                         "plane_data": plane_data,
@@ -796,24 +774,25 @@ def adsb_processing_thread():
 
                 if is_new_plane:
                     add_message(f"NEW plane {icao}")
-                
+
                 #If online mode no API data yet and enough time has passed since last error
                 if not effective_offline and plane_data["manufacturer"] == "-" and can_retry_plane_api(plane_data, PLANE_API_RETRY_DELAY):
                     threading.Thread(target=api_worker_thread, args=(icao, plane_data), daemon=True).start()
 
-        except socket.timeout:
-            pass
+        except FileNotFoundError:
+            if readsb_connected:
+                add_message(f"readsb unavailable: {READSB_JSON_PATH} not found")
+                readsb_connected = False
+            time.sleep(3)
+            is_receiving = False
+            continue
         except Exception as e:
             log.error(f"ADSB loop error: {e}")
             add_message(f"ADSB loop error: {str(e)[:40]}")
-            if sock is not None:
-                try:
-                    sock.close()
-                except Exception:
-                    pass
-                sock = None
-            recv_buffer = ""
+            readsb_connected = False
             time.sleep(1)
+            is_receiving = False
+            continue
 
         #Periodically clean old planes and upload stats
         current_time = time.time()
@@ -833,15 +812,18 @@ def adsb_processing_thread():
 
         if current_time - last_stats_upload > 60 and not offline and network_available:
             try:
-                cpu_temp = int(open("/sys/class/thermal/thermal_zone0/temp").read()) / 1000
+                try:
+                    cpu_temp = int(open("/sys/class/thermal/thermal_zone0/temp").read()) / 1000
+                except OSError:
+                    cpu_temp = 0
                 ram_percentage = psutil.virtual_memory()[2]
-                
+
                 #Upload flight stats with improved error handling
                 today = datetime.today().strftime("%Y-%m-%d")
                 stats_ref = db.reference(f"{today}/stats")
-                
+
                 new_stats = functions.get_stats()
-                
+
                 #More detailed validation and logging
                 if new_stats is None:
                     log.warning("Stats validation: get_stats() returned None")
@@ -864,7 +846,7 @@ def adsb_processing_thread():
                     else:
                         #Stats look valid proceed with upload
                         current_stats = stats_ref.get()
-                        
+
                         #Upload if no existing stats or new total is higher/equal
                         if current_stats is None:
                             stats_ref.set(new_stats)
@@ -875,7 +857,7 @@ def adsb_processing_thread():
                         else:
                             log.info(f"Stats upload skipped: new total ({total}) < current ({current_stats.get('total')})")
                             add_message(f"Stats: skip (new < current)")
-                
+
                 #Upload device stats
                 device_stats_ref = db.reference("device_stats")
                 device_stats_ref.update({
@@ -883,16 +865,14 @@ def adsb_processing_thread():
                     "ram_percentage": ram_percentage,
                     "run": True
                 })
-                
+
                 last_stats_upload = current_time
             except Exception as e:
                 log.error(f"Stats upload error: {e}")
                 add_message(f"Stats upload error: {str(e)[:30]}")
 
         is_receiving = False
-
-    if sock:
-        sock.close()
+        time.sleep(1)
 
 def convert_distance_from_km(distance_km, unit):
     if distance_km in (None, '-'):
@@ -1004,7 +984,10 @@ def main():
 
         #Refresh expensive local stats on a timer instead of every frame
         if current_time - last_system_stats_refresh >= 1:
-            cpu_temp = int(open("/sys/class/thermal/thermal_zone0/temp").read()) / 1000
+            try:
+                cpu_temp = int(open("/sys/class/thermal/thermal_zone0/temp").read()) / 1000
+            except OSError:
+                cpu_temp = 0
             ram_percentage = psutil.virtual_memory()[2]
             cpu_percentage = psutil.cpu_percent()
             disk_free = functions.get_disk_free()
@@ -1698,87 +1681,40 @@ def main():
             mfg = p_data.get('manufacturer', '-')
             model = p_data.get('model', '-')
             owner = p_data.get('owner', '-')
-            model_display = model[:25] if model != '-' else model
-            owner_display = owner[:25] if owner != '-' else owner
-            
-            reg = p_data.get('registration', '-')
-            alt = p_data.get('altitude', '-')
-            spd = p_data.get('speed', '-')
-            lat = p_data.get('last_lat', '-')
-            lon = p_data.get('last_lon', '-')
-            total_hits = p_data.get("total_hit_count", 0)
+            model_display = (f"{mfg} {model}")[:28] if mfg != '-' and model != '-' else "Unidentified Aircraft"
+            owner_display = owner[:28] if owner != '-' else "Unidentified Airline"
 
-            
-            
             id_y = separator_y + 10
-            if not offline and mfg != "-" and model != "-":
-                full_model_display = f"{mfg} {model_display}"[:25]
-                draw_text.normal(window, full_model_display, plane_identity_font, (255, 255, 255), col1, id_y)
-            else:
-                draw_text.normal(window, "Unidentified Aircraft", plane_identity_font, (255, 255, 255), col1, id_y)
+            draw_text.normal(window, model_display, plane_identity_font, (255, 255, 255), col1, id_y)
+            draw_text.normal(window, owner_display, plane_identity_font, (255, 255, 255), col1, id_y + 16)
 
-            if owner != "-":
-                draw_text.normal(window, f"{owner_display}", plane_identity_font, (255, 255, 255), col1, id_y + 20)
-            else:
-                draw_text.normal(window, f"Unidentified Airline", plane_identity_font, (255, 255, 255), col1, id_y + 20)
-
-            
-            
-            stat_y = id_y + 50
+            stat_y = id_y + 42
             lx = col1
             rx = col2
-            spacing = 18  
-            
-            def rnd(val, dec=1): 
+            spacing = 18
+
+            def rnd(val, dec=1):
                 try: return round(float(val), dec)
                 except: return "-"
 
-            #Row 1 ICAO / Reg
-            if target_icao != '-':
-                draw_text.normal(window, f"HEX: {target_icao}", stat_font, (200, 200, 200), col1, stat_y)
-            else:
-                draw_text.normal(window, f"HEX: N/A", stat_font, (200, 200, 200), col1, stat_y)
+            flight = p_data.get('flight', '-')
+            alt = p_data.get('altitude', '-')
+            baro_rate = p_data.get('baro_rate', '-')
+            reg = p_data.get('registration', '-')
+            spd = p_data.get('speed', '-')
+            total_hits = p_data.get("total_hit_count", 0)
 
-            if reg != '-':
-                draw_text.normal(window, f"REG: {reg}", stat_font, (200, 200, 200), rx, stat_y)
-            else:
-                draw_text.normal(window, f"REG: N/A", stat_font, (200, 200, 200), rx, stat_y)
-            
-            #Row 2 Alt / Speed
-            if alt != '-':
-                draw_text.normal(window, f"ALT: {alt}ft", stat_font, (200, 200, 200), lx, stat_y + spacing)
-            else:
-                draw_text.normal(window, f"ALT: N/A", stat_font, (200, 200, 200), lx, stat_y + spacing)
+            draw_text.normal(window, f"FLIGHT: {flight if flight != '-' else 'N/A'}", stat_font, (200, 200, 200), lx, stat_y)
+            draw_text.normal(window, f"HEX: {target_icao or 'N/A'}", stat_font, (200, 200, 200), rx, stat_y)
 
-            if spd != '-':
-                draw_text.normal(window, f"SPD: {spd}kt", stat_font, (200, 200, 200), rx, stat_y + spacing)
-            else:
-                draw_text.normal(window, f"SPD: N/A", stat_font, (200, 200, 200), rx, stat_y + spacing)
-            
-            #Row 3 Lat / Lon (4 decimals)
-            if lat != '-':
-                draw_text.normal(window, f"LAT: {rnd(lat, 4)}", stat_font, (200, 200, 200), lx, stat_y + spacing*2)
-            else:
-                draw_text.normal(window, f"LAT: N/A", stat_font, (200, 200, 200), lx, stat_y + spacing*2)
+            draw_text.normal(window, f"ALT: {f'{alt}ft' if alt != '-' else 'N/A'}", stat_font, (200, 200, 200), lx, stat_y + spacing)
+            draw_text.normal(window, f"REG: {reg if reg != '-' else 'N/A'}", stat_font, (200, 200, 200), rx, stat_y + spacing)
 
-            if lon != '-':
-                draw_text.normal(window, f"LON: {rnd(lon, 4)}", stat_font, (200, 200, 200), rx, stat_y + spacing*2)
-            else:
-                draw_text.normal(window, f"LON: N/A", stat_font, (200, 200, 200), rx, stat_y + spacing*2)
-            
-            #Row 4 Hits / Dist
-            draw_text.normal(window, f"HITS: {int(total_hits)}", stat_font, (200, 200, 200), lx, stat_y + spacing*3)
-            
-            
-            
-            
-            dist_km = p_data.get('distance', '-')
-            dist_text = 'Unknown'
-            if dist_km != '-':
-                converted_distance = convert_distance_from_km(float(dist_km), distance_unit)
-                if converted_distance is not None:
-                    dist_text = f"{rnd(converted_distance, 2)}{distance_unit.lower()}"
-            draw_text.normal(window, f"DST: {dist_text}", stat_font, (200, 200, 200), rx, stat_y + spacing*3)
+            baro_display = f"{baro_rate:+d}fpm" if baro_rate != '-' else 'N/A'
+            draw_text.normal(window, f"BARO: {baro_display}", stat_font, (200, 200, 200), lx, stat_y + spacing * 2)
+            draw_text.normal(window, f"SPD: {f'{rnd(spd)}kt' if spd != '-' else 'N/A'}", stat_font, (200, 200, 200), rx, stat_y + spacing * 2)
+
+            draw_text.normal(window, f"HITS: {int(total_hits)}", stat_font, (200, 200, 200), lx, stat_y + spacing * 3)
         else:
             draw_text.center(window, "NO PLANE SELECTED", text_font1, (100, 100, 100), SIDEBAR_X + SIDEBAR_WIDTH // 2, separator_y + 80)
 

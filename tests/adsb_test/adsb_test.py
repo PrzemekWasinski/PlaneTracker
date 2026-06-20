@@ -1,42 +1,23 @@
-import socket
+#!/usr/bin/env python3
 
-HOST = "localhost"
-PORT = 30003
+import json
+import time
 
-#Basic script that outputs ADSB data from the antenna
-
-def main():
-    print(f"Connecting to {HOST}:{PORT}...")
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.connect((HOST, PORT))
-    sock.settimeout(1.0)
-    buffer = ""
-
-    print("Connected. Printing raw messages. Press Ctrl+C to stop.\n")
-
+while True:
     try:
-        while True:
-            try:
-                data = sock.recv(4096)
-                if not data:
-                    print("Connection closed by server")
-                    break
+        with open("/run/readsb/aircraft.json", "r") as f:
+            data = json.load(f)
 
-                buffer += data.decode(errors="ignore")
-                lines = buffer.split("\n")
-                buffer = lines.pop() if lines else ""
+        aircraft = data.get("aircraft", [])
 
-                for line in lines:
-                    line = line.strip()
-                    if line:
-                        print(line)
-            except socket.timeout:
-                continue
-    except KeyboardInterrupt:
-        print("\nStopped")
-    finally:
-        sock.close()
+        print(f"\nAircraft visible: {len(aircraft)}")
+        print("=" * 80)
 
+        for plane in aircraft:
+            print(json.dumps(plane, indent=2, sort_keys=True))
+            print("-" * 80)
 
-if __name__ == "__main__":
-    main()
+    except Exception as e:
+        print("Error:", e)
+
+    time.sleep(1)
