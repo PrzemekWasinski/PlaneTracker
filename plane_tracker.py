@@ -958,7 +958,7 @@ def main():
         pic_h = 203
         logs_y = pic_y + pic_h + 10
         logs_h = (height - 50) - logs_y - 10
-        filter_panel_rect = pygame.Rect(SIDEBAR_X + (SIDEBAR_WIDTH // 2) + 5, logs_y + 215, int(SIDEBAR_WIDTH / 2) - 5, int(logs_h // 2))
+        filter_panel_rect = pygame.Rect(SIDEBAR_X + (SIDEBAR_WIDTH // 2) + 5, (315 // 2) + 68 + 150, int(SIDEBAR_WIDTH / 2) - 5, int(logs_h // 2))
         heatmap_button_rect = pygame.Rect(filter_panel_rect.right - 48, filter_panel_rect.top + 8, 40, 40)
         hide_planes_button_rect = pygame.Rect(filter_panel_rect.right - 48, filter_panel_rect.top + 56, 40, 40)
         reset_filters_button_rect = pygame.Rect(filter_panel_rect.right - 48, filter_panel_rect.top + 104, 40, 40)
@@ -1700,14 +1700,26 @@ def main():
             draw_text.normal(window, f"SPD: {f'{rnd(spd)}kt' if spd != '-' else 'N/A'}", stat_font, (200, 200, 200), rx, stat_y + spacing * 2)
 
             draw_text.normal(window, f"HITS: {int(total_hits)}", stat_font, (200, 200, 200), lx, stat_y + spacing * 3)
+
+            dist_km = p_data.get('distance', '-')
+            if dist_km != '-' and dist_km is not None:
+                try:
+                    dist_converted = convert_distance_from_km(float(dist_km), distance_unit)
+                    dist_text = f"{rnd(dist_converted, 1)}{distance_unit.lower()}"
+                except (TypeError, ValueError):
+                    dist_text = 'N/A'
+            else:
+                dist_text = 'N/A'
+            draw_text.normal(window, f"DST: {dist_text}", stat_font, (200, 200, 200), rx, stat_y + spacing * 3)
         else:
             draw_text.center(window, "NO PLANE SELECTED", text_font1, (100, 100, 100), SIDEBAR_X + SIDEBAR_WIDTH // 2, separator_y + 80)
 
         #LOGS BOX
-        logs_y = altitude_graph_rect.bottom + 5
-        logs_h = filter_panel_rect.top - logs_y - 5
-        pygame.draw.rect(window, (20, 20, 20), (filter_panel_rect.left, logs_y, filter_panel_rect.width, logs_h), 0)
-        pygame.draw.rect(window, (100, 100, 100), (filter_panel_rect.left, logs_y, filter_panel_rect.width, logs_h), 1)
+        logs_y = altitude_graph_rect.bottom + 10
+        bottom_row_y = filter_panel_rect.bottom + 10
+        log_h = (height - 50) - bottom_row_y - 10
+        pygame.draw.rect(window, (20, 20, 20), (filter_panel_rect.left, bottom_row_y, filter_panel_rect.width, log_h), 0)
+        pygame.draw.rect(window, (100, 100, 100), (filter_panel_rect.left, bottom_row_y, filter_panel_rect.width, log_h), 1)
 
         with data_lock:
             prune_history(directional_hit_history, DIRECTIONAL_HISTORY_SECONDS, current_time)
@@ -1736,7 +1748,7 @@ def main():
         )
 
         #INFO BOX — polar plot + system stats
-        info_box_rect = pygame.Rect(SIDEBAR_X + 5, filter_panel_rect.top, int((SIDEBAR_WIDTH / 2) - 5), filter_panel_rect.height)
+        info_box_rect = pygame.Rect(SIDEBAR_X + 5, logs_y, int((SIDEBAR_WIDTH / 2) - 10), filter_panel_rect.height)
         pygame.draw.rect(window, (20, 20, 20), info_box_rect, 0)
         pygame.draw.rect(window, (100, 100, 100), info_box_rect, 1)
 
@@ -1771,7 +1783,7 @@ def main():
         draw_text.normal(window, "Camera", stat_font, (255, 255, 255), sx + 14, dot_y + sp * 2)
 
         log_max_w = filter_panel_rect.width - 10
-        y_msg = logs_y + 10
+        y_msg = bottom_row_y + 10
         with data_lock:
             for message in message_queue[-50:]:
                 colour = (200, 200, 200)
@@ -1781,10 +1793,56 @@ def main():
                     colour = (0, 255, 0)
                 draw_text.normal(window, truncate_log_text(str(message), text_font3, log_max_w), text_font3, colour, filter_panel_rect.left + 5, y_msg)
                 y_msg += 11
-                if y_msg > logs_y + logs_h - 10: 
+                if y_msg > bottom_row_y + log_h - 10:
                     break
 
-        #TOOLBAR 
+        #CAMERA IMAGE
+        cam_w = int((SIDEBAR_WIDTH / 2) - 10)
+        cam_h = int(cam_w * 3 / 4)
+        cam_rect = pygame.Rect(SIDEBAR_X + 5, bottom_row_y, cam_w, cam_h)
+        pygame.draw.rect(window, (20, 20, 20), cam_rect, 0)
+        pygame.draw.rect(window, (100, 100, 100), cam_rect, 1)
+
+        with data_lock:
+            camera_busy = tracker_capture_in_progress
+            camera_connected = tracker_status_connected
+            target_cam_surface = tracker_plane_photo_cache.get(target_icao) if target_icao else None
+            selected_cam_surface = tracker_plane_photo_cache.get(selected_plane_icao) if selected_plane_icao else None
+            latest_cam_surface = tracker_photo_surface
+            _meta_icao = target_icao or selected_plane_icao
+            cam_meta = dict(tracker_plane_photo_meta_cache.get(_meta_icao, tracker_photo_meta))
+
+        if target_cam_surface is not None:
+            camera_photo_surface = target_cam_surface
+        elif selected_cam_surface is not None:
+            camera_photo_surface = selected_cam_surface
+        elif target_icao or selected_plane_icao:
+            camera_photo_surface = None
+        else:
+            camera_photo_surface = latest_cam_surface
+
+        if camera_photo_surface is not None:
+            img_w, img_h = camera_photo_surface.get_size()
+            if img_w > 0 and img_h > 0:
+                scale = min(cam_rect.width / img_w, cam_rect.height / img_h)
+                scaled_size = (max(1, int(img_w * scale)), max(1, int(img_h * scale)))
+                scaled_surface = pygame.transform.smoothscale(camera_photo_surface, scaled_size)
+                window.blit(scaled_surface, scaled_surface.get_rect(center=cam_rect.center))
+        else:
+            placeholder = 'CAMERA BUSY' if camera_busy else 'NO IMAGE'
+            draw_text.center(window, placeholder, text_font1, (100, 100, 100), cam_rect.centerx, cam_rect.centery)
+
+        cam_status = 'BUSY' if camera_busy else ('CONNECTED' if camera_connected else 'OFFLINE')
+        cam_pan = cam_meta.get('pan', '-')
+        cam_tilt = cam_meta.get('tilt', '-')
+        cam_sx = cam_rect.left
+        cam_sy = cam_rect.bottom + 10
+        cam_sp = 15
+        draw_text.normal(window, f"STATUS: {cam_status}", stat_font, (200, 200, 200), cam_sx, cam_sy)
+        draw_text.normal(window, f"PAN: {cam_pan}", stat_font, (200, 200, 200), cam_sx, cam_sy + cam_sp)
+        draw_text.normal(window, f"TILT: {cam_tilt}", stat_font, (200, 200, 200), cam_sx, cam_sy + cam_sp * 2)
+
+        #TOOLBAR
         toolbar_buttons = [
             (zoom_in_ctrl_rect, zoom_in_icon),
             (zoom_out_ctrl_rect, zoom_out_icon),
