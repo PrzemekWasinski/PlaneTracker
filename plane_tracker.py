@@ -214,6 +214,39 @@ AUTO_TRACK_POLYGON_KEYS = (("tlLat", "tlLon"), ("trLat", "trLon"), ("brLat", "br
 AUTO_TRACK_CONFIGURED = all(_config.get(lat_key) is not None and _config.get(lon_key) is not None for lat_key, lon_key in AUTO_TRACK_POLYGON_KEYS)
 instance_lock_file = None
 
+ICAO_CACHE_PATH = './config/icao_cache.json'
+ICAO_CACHE_MAX_AGE_DAYS = 30
+icao_cache = {}
+api_pending = set()
+
+
+def load_icao_cache():
+    global icao_cache
+    try:
+        if os.path.exists(ICAO_CACHE_PATH):
+            with open(ICAO_CACHE_PATH, 'r') as f:
+                icao_cache = json.load(f)
+            log.info(f"Loaded {len(icao_cache)} entries from ICAO cache")
+    except Exception as e:
+        log.warning(f"Could not load ICAO cache: {e}")
+        icao_cache = {}
+
+
+def save_icao_cache_entry(icao, data):
+    entry = {k: data[k] for k in ('manufacturer', 'model', 'owner', 'registration') if k in data}
+    entry['cached_at'] = time.time()
+    icao_cache[icao] = entry
+    try:
+        tmp = ICAO_CACHE_PATH + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(icao_cache, f)
+        os.replace(tmp, ICAO_CACHE_PATH)
+    except Exception as e:
+        log.warning(f"Could not save ICAO cache: {e}")
+
+
+load_icao_cache()
+
 def acquire_instance_lock():
     global instance_lock_file
     lock_path = '/tmp/plane_tracker.lock'
@@ -326,20 +359,23 @@ def save_tracker_image(image_bytes, target_icao):
 
 #Helper thread for API fetches to avoid blocking the radar
 def api_worker_thread(icao, plane_data):
-    api_data = fetch_plane_info(icao)
-    if api_data:
-        plane_snapshot = None
-        with data_lock:
-            if icao in active_planes:
-                active_planes[icao].update(api_data)
-                plane_snapshot = dict(active_planes[icao])
-            if icao in displayed_planes:
-                displayed_planes[icao]["plane_data"].update(api_data)
+    try:
+        api_data = fetch_plane_info(icao)
+        if api_data:
+            plane_snapshot = None
+            with data_lock:
+                if icao in active_planes:
+                    active_planes[icao].update(api_data)
+                    plane_snapshot = dict(active_planes[icao])
+                if icao in displayed_planes:
+                    displayed_planes[icao]["plane_data"].update(api_data)
 
-        #Only save if we got actual plane data (not just an error timestamp)
-        if plane_snapshot and api_data.get("manufacturer") and api_data.get("manufacturer") != "-":
-            save_plane_to_csv(icao, plane_snapshot)
-            upload_to_firebase(plane_snapshot)
+            if plane_snapshot and api_data.get("manufacturer") and api_data.get("manufacturer") != "-":
+                save_plane_to_csv(icao, plane_snapshot)
+                upload_to_firebase(plane_snapshot)
+                save_icao_cache_entry(icao, api_data)
+    finally:
+        api_pending.discard(icao)
 
 
 def fetch_tracker_stats(log_result=False):
@@ -781,10 +817,17 @@ def adsb_processing_thread():
                     }
 
                 if is_new_plane:
+                    cache_entry = icao_cache.get(icao)
+                    if cache_entry and (time.time() - cache_entry.get('cached_at', 0)) < ICAO_CACHE_MAX_AGE_DAYS * 86400:
+                        for field in ('manufacturer', 'model', 'owner', 'registration'):
+                            if field in cache_entry:
+                                plane_data[field] = cache_entry[field]
+                        active_planes[icao] = plane_data
+                        displayed_planes[icao]["plane_data"] = plane_data
                     add_message(f"NEW plane {icao}")
 
-                #If online mode no API data yet and enough time has passed since last error
-                if not effective_offline and plane_data["manufacturer"] == "-" and can_retry_plane_api(plane_data, PLANE_API_RETRY_DELAY):
+                if not effective_offline and plane_data["manufacturer"] == "-" and icao not in api_pending and can_retry_plane_api(plane_data, PLANE_API_RETRY_DELAY):
+                    api_pending.add(icao)
                     threading.Thread(target=api_worker_thread, args=(icao, plane_data), daemon=True).start()
 
         except FileNotFoundError:
@@ -948,10 +991,10 @@ def main():
     cpu_percentage = 0
     disk_free = functions.get_disk_free()
     
-    #NEW: Track view center (initially use config location)
     view_center_lat = _config['myLat']
     view_center_lon = _config['myLon']
-    
+    plane_headings = {}
+
     while True:
         current_time = time.time()
         pic_y = 377
@@ -1437,15 +1480,16 @@ def main():
                 prev_lon = plane.get("prev_lon")
                 heading = plane.get("track")
                 if heading == "-" or heading is None:
-                    heading = 0.0
+                    heading = plane_headings.get(icao, 0.0)
                 else:
                     try:
                         heading = float(heading)
                     except ValueError:
-                        heading = 0.0
+                        heading = plane_headings.get(icao, 0.0)
                 if prev_lat is not None and prev_lon is not None:
-                    heading = functions.calculate_heading(prev_lat, prev_lon, lat, lon)
-                    plane["track"] = heading #Update track with calculated heading
+                    if abs(float(prev_lat) - float(lat)) > 1e-6 or abs(float(prev_lon) - float(lon)) > 1e-6:
+                        heading = functions.calculate_heading(prev_lat, prev_lon, lat, lon)
+                plane_headings[icao] = heading
 
                 if tracking_mode_auto and auto_track_rect is not None and auto_track_rect.collidepoint(int(x), int(y)):
                     current_auto_track_icaos.add(icao)

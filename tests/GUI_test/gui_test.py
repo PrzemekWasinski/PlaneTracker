@@ -940,8 +940,9 @@ def main():
                     except ValueError:
                         heading = 0.0
                 if prev_lat is not None and prev_lon is not None:
-                    heading = functions.calculate_heading(prev_lat, prev_lon, lat, lon)
-                    plane["track"] = heading #Update track with calculated heading
+                    if abs(float(prev_lat) - float(lat)) > 1e-6 or abs(float(prev_lon) - float(lon)) > 1e-6:
+                        heading = functions.calculate_heading(prev_lat, prev_lon, lat, lon)
+                        plane["track"] = heading
 
                 if tracking_mode_auto and auto_track_rect is not None and auto_track_rect.collidepoint(int(x), int(y)):
                     current_auto_track_icaos.add(icao)
