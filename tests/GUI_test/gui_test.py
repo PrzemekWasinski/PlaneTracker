@@ -936,7 +936,7 @@ def main():
                     heading = 0.0
                 else:
                     try:
-                        heading = float(heading)
+                        heading = -float(heading)
                     except ValueError:
                         heading = 0.0
                 if prev_lat is not None and prev_lon is not None:
@@ -1011,14 +1011,16 @@ def main():
 
                 #Labels
                 label_colour = (0, 255, 255) if icao == target_icao else (0, 255, 0)
+                flight = plane.get("flight", "-")
+                display_label = flight if (flight and flight != "-") else icao
                 if hide_planes_mode == 0:
                     if not offline and plane.get('manufacturer') != "-":
-                        draw_text.fading(window, icao, text_font3, label_colour, x, y - 26, fade_value)
+                        draw_text.fading(window, display_label, text_font3, label_colour, x, y - 26, fade_value)
                         draw_text.fading(window, plane.get("owner", "-"), text_font3, label_colour, x, y - 13, fade_value)
                         draw_text.fading(window, f"{plane.get('manufacturer')} {plane.get('model')}", text_font3, label_colour, x, y + 13, fade_value)
                         draw_text.fading(window, f"{plane.get('altitude', '-')}ft", text_font3, label_colour, x, y + 26, fade_value)
                     else:
-                        draw_text.fading(window, icao, text_font3, label_colour, x, y - 13, fade_value)
+                        draw_text.fading(window, display_label, text_font3, label_colour, x, y - 13, fade_value)
                         draw_text.fading(window, f"{plane.get('altitude', '-')}ft", text_font3, label_colour, x, y + 13, fade_value)
 
             except Exception as e:

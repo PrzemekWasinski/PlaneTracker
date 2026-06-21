@@ -218,6 +218,17 @@ ICAO_CACHE_PATH = './config/icao_cache.json'
 ICAO_CACHE_MAX_AGE_DAYS = 30
 icao_cache = {}
 api_pending = set()
+api_request_timestamps = deque()
+API_RATE_LIMIT_WINDOW = 300
+API_RATE_LIMIT_MAX = 900
+
+
+def get_api_request_count_5min(now=None):
+    now = now or time.time()
+    cutoff = now - API_RATE_LIMIT_WINDOW
+    while api_request_timestamps and api_request_timestamps[0] < cutoff:
+        api_request_timestamps.popleft()
+    return len(api_request_timestamps)
 
 
 def load_icao_cache():
@@ -360,8 +371,26 @@ def save_tracker_image(image_bytes, target_icao):
 #Helper thread for API fetches to avoid blocking the radar
 def api_worker_thread(icao, plane_data):
     try:
+        api_request_timestamps.append(time.time())
         api_data = fetch_plane_info(icao)
-        if api_data:
+        if api_data is None:
+            # 404 - not in database, no point retrying
+            with data_lock:
+                if icao in active_planes:
+                    active_planes[icao]['api_retries_exhausted'] = True
+        elif 'last_api_error' in api_data:
+            # Network/server error - increment retry count and stop after 3 total attempts
+            with data_lock:
+                if icao in active_planes:
+                    retry_count = active_planes[icao].get('api_retry_count', 0) + 1
+                    active_planes[icao]['api_retry_count'] = retry_count
+                    active_planes[icao]['last_api_error'] = api_data['last_api_error']
+                    if retry_count >= 3:
+                        active_planes[icao]['api_retries_exhausted'] = True
+                if icao in displayed_planes:
+                    displayed_planes[icao]['plane_data']['last_api_error'] = api_data['last_api_error']
+        else:
+            # Success
             plane_snapshot = None
             with data_lock:
                 if icao in active_planes:
@@ -369,7 +398,6 @@ def api_worker_thread(icao, plane_data):
                     plane_snapshot = dict(active_planes[icao])
                 if icao in displayed_planes:
                     displayed_planes[icao]["plane_data"].update(api_data)
-
             if plane_snapshot and api_data.get("manufacturer") and api_data.get("manufacturer") != "-":
                 save_plane_to_csv(icao, plane_snapshot)
                 upload_to_firebase(plane_snapshot)
@@ -727,6 +755,7 @@ def adsb_processing_thread():
                 readsb_connected = True
 
             aircraft_list = data.get("aircraft", [])
+            current_api_count = get_api_request_count_5min()
 
             for aircraft in aircraft_list:
                 plane_data = functions.parse_aircraft(aircraft)
@@ -745,6 +774,8 @@ def adsb_processing_thread():
                         plane_data["owner"] = cached.get("owner", "-")
                         plane_data["model"] = cached.get("model", "-")
                         plane_data["last_api_error"] = cached.get("last_api_error", 0)
+                        plane_data["api_retry_count"] = cached.get("api_retry_count", 0)
+                        plane_data["api_retries_exhausted"] = cached.get("api_retries_exhausted", False)
                         if "last_lat" in cached:
                             plane_data["prev_lat"] = cached["last_lat"]
                             plane_data["prev_lon"] = cached["last_lon"]
@@ -766,6 +797,8 @@ def adsb_processing_thread():
                         plane_data["owner"] = "-"
                         plane_data["model"] = "-"
                         plane_data["last_api_error"] = 0
+                        plane_data["api_retry_count"] = 0
+                        plane_data["api_retries_exhausted"] = False
                         plane_data["location_history"] = {}
                         plane_data["altitude_history"] = deque()
                         plane_data["hit_history"] = deque()
@@ -826,8 +859,9 @@ def adsb_processing_thread():
                         displayed_planes[icao]["plane_data"] = plane_data
                     add_message(f"NEW plane {icao}")
 
-                if not effective_offline and plane_data["manufacturer"] == "-" and icao not in api_pending and can_retry_plane_api(plane_data, PLANE_API_RETRY_DELAY):
+                if not effective_offline and plane_data["manufacturer"] == "-" and not plane_data.get("api_retries_exhausted") and icao not in api_pending and can_retry_plane_api(plane_data, PLANE_API_RETRY_DELAY) and current_api_count < API_RATE_LIMIT_MAX:
                     api_pending.add(icao)
+                    current_api_count += 1
                     threading.Thread(target=api_worker_thread, args=(icao, plane_data), daemon=True).start()
 
         except FileNotFoundError:
@@ -1476,20 +1510,21 @@ def main():
                 x, y = functions.coords_to_xy(float(lat), float(lon), range_km, view_center_lat, view_center_lon, width, height, RADAR_CENTER_X, RADAR_CENTER_Y)
 
                 #Calculate Heading
-                prev_lat = plane.get("prev_lat")
-                prev_lon = plane.get("prev_lon")
-                heading = plane.get("track")
-                if heading == "-" or heading is None:
-                    heading = plane_headings.get(icao, 0.0)
-                else:
+                track = plane.get("track")
+                if track != "-" and track is not None:
                     try:
-                        heading = float(heading)
+                        heading = -float(track)
+                        plane_headings[icao] = heading
                     except ValueError:
                         heading = plane_headings.get(icao, 0.0)
-                if prev_lat is not None and prev_lon is not None:
-                    if abs(float(prev_lat) - float(lat)) > 1e-6 or abs(float(prev_lon) - float(lon)) > 1e-6:
+                else:
+                    prev_lat = plane.get("prev_lat")
+                    prev_lon = plane.get("prev_lon")
+                    if prev_lat is not None and prev_lon is not None and (abs(float(prev_lat) - float(lat)) > 1e-6 or abs(float(prev_lon) - float(lon)) > 1e-6):
                         heading = functions.calculate_heading(prev_lat, prev_lon, lat, lon)
-                plane_headings[icao] = heading
+                        plane_headings[icao] = heading
+                    else:
+                        heading = plane_headings.get(icao, 0.0)
 
                 if tracking_mode_auto and auto_track_rect is not None and auto_track_rect.collidepoint(int(x), int(y)):
                     current_auto_track_icaos.add(icao)
@@ -1558,14 +1593,16 @@ def main():
 
                 #Labels
                 label_colour = (0, 255, 255) if icao == target_icao else (0, 255, 0)
+                flight = plane.get("flight", "-")
+                display_label = flight if (flight and flight != "-") else icao
                 if hide_planes_mode == 0:
                     if not offline and plane.get('manufacturer') != "-":
-                        draw_text.fading(window, icao, text_font3, label_colour, x, y - 26, fade_value)
+                        draw_text.fading(window, display_label, text_font3, label_colour, x, y - 26, fade_value)
                         draw_text.fading(window, plane.get("owner", "-"), text_font3, label_colour, x, y - 13, fade_value)
                         draw_text.fading(window, f"{plane.get('manufacturer')} {plane.get('model')}", text_font3, label_colour, x, y + 13, fade_value)
                         draw_text.fading(window, f"{plane.get('altitude', '-')}ft", text_font3, label_colour, x, y + 26, fade_value)
                     else:
-                        draw_text.fading(window, icao, text_font3, label_colour, x, y - 13, fade_value)
+                        draw_text.fading(window, display_label, text_font3, label_colour, x, y - 13, fade_value)
                         draw_text.fading(window, f"{plane.get('altitude', '-')}ft", text_font3, label_colour, x, y + 13, fade_value)
 
             except Exception as e:
@@ -1660,13 +1697,17 @@ def main():
         furthest_text = format_distance(furthest_detected, distance_unit, 1) if furthest_detected is not None else 'Unknown'
         highest_text = f"{highest_detected}ft" if highest_detected is not None else 'Unknown'
 
+        api_count_5min = get_api_request_count_5min(current_time)
+        api_count_colour = (255, 50, 50) if api_count_5min >= API_RATE_LIMIT_MAX else (255, 255, 255)
+        _sp = 17
         draw_text.normal(window, f"Total Seen: {stats['total']}", text_font3, (255, 255, 255), col1, sys_y)
-        draw_text.normal(window, f"Top Mfg: {top_mfg}", text_font3, (255, 255, 255), col1, sys_y + 20)
-        draw_text.normal(window, f"Top Type: {top_type}", text_font3, (255, 255, 255), col1, sys_y + 40)
-        draw_text.normal(window, f"Top Airline: {top_airline}", text_font3, (255, 255, 255), col1, sys_y + 60)
-        draw_text.normal(window, f"Active Count: {displayed_count}", text_font3, (0, 255, 0), col1, sys_y + 80)
-        draw_text.normal(window, f"Furthest Detected: {furthest_text}", text_font3, (255, 255, 255), col1, sys_y + 100)
-        draw_text.normal(window, f"Highest Detected: {highest_text}", text_font3, (255, 255, 255), col1, sys_y + 120)
+        draw_text.normal(window, f"Top Mfg: {top_mfg}", text_font3, (255, 255, 255), col1, sys_y + _sp)
+        draw_text.normal(window, f"Top Type: {top_type}", text_font3, (255, 255, 255), col1, sys_y + _sp * 2)
+        draw_text.normal(window, f"Top Airline: {top_airline}", text_font3, (255, 255, 255), col1, sys_y + _sp * 3)
+        draw_text.normal(window, f"Active Count: {displayed_count}", text_font3, (0, 255, 0), col1, sys_y + _sp * 4)
+        draw_text.normal(window, f"Furthest Detected: {furthest_text}", text_font3, (255, 255, 255), col1, sys_y + _sp * 5)
+        draw_text.normal(window, f"Highest Detected: {highest_text}", text_font3, (255, 255, 255), col1, sys_y + _sp * 6)
+        draw_text.normal(window, f"API Requests 5 Min: {api_count_5min}", text_font3, api_count_colour, col1, sys_y + _sp * 7)
 
         #Sperator 2
         separator_y = (315 // 2) + 68
