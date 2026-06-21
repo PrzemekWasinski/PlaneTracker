@@ -298,7 +298,7 @@ def add_message(message):
 
     with data_lock:
         message_queue.append(formatted_message)
-        if len(message_queue) > 37:
+        if len(message_queue) > 60:
             message_queue.pop(0)
 
 
@@ -1802,7 +1802,7 @@ def main():
         #LOGS BOX
         logs_y = altitude_graph_rect.bottom + 10
         bottom_row_y = filter_panel_rect.bottom + 10
-        log_h = (height - 50) - bottom_row_y - 10
+        log_h = (height - 10) - bottom_row_y
         pygame.draw.rect(window, (20, 20, 20), (filter_panel_rect.left, bottom_row_y, filter_panel_rect.width, log_h), 0)
         pygame.draw.rect(window, (100, 100, 100), (filter_panel_rect.left, bottom_row_y, filter_panel_rect.width, log_h), 1)
 
@@ -1868,9 +1868,9 @@ def main():
         draw_text.normal(window, "Camera", stat_font, (255, 255, 255), sx + 14, dot_y + sp * 2)
 
         log_max_w = filter_panel_rect.width - 10
-        y_msg = bottom_row_y + 10
+        y_msg = bottom_row_y + 2
         with data_lock:
-            for message in message_queue[-50:]:
+            for message in message_queue[-60:]:
                 colour = (200, 200, 200)
                 if "WARNING" in message:
                     colour = (255, 0, 0)
