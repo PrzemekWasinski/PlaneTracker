@@ -45,36 +45,6 @@ def can_retry_plane_api(plane_data, retry_delay):
     return (time.time() - last_error) >= retry_delay
 
 
-def try_backup_api(icao):
-    try:
-        url = f'https://opensky-network.org/api/metadata/aircraft/icao/{icao}'
-        response = requests.get(url, timeout=5)
-
-        if response.status_code == 200:
-            api_data = response.json()
-            output = {
-                'manufacturer': api_data.get('model', '-').split(' ', 1)[0],
-                'registration': api_data.get('registration', '-'),
-                'owner': api_data.get('operator', '-'),
-                'model': api_data.get('model', '-').split(' ', 1)[1] if ' ' in api_data.get('model', '') else '-',
-                'last_api_error': 0,
-            }
-
-            if output.get('manufacturer') == '' or output.get('registration') == '' or output.get('owner') == '' or output.get('model') == '':
-                return None
-            return output
-
-        if response.status_code == 404:
-            return None
-        if response.status_code >= 500:
-            print(f"Backup server error {response.status_code}")
-            return {'last_api_error': time.time()}
-    except Exception as e:
-        print(f"Backup API error: {e}")
-
-    return None
-
-
 def fetch_plane_info(icao):
     try:
         url = f'https://hexdb.io/api/v1/aircraft/{icao}'
@@ -93,30 +63,22 @@ def fetch_plane_info(icao):
                 'registration': clean_string(str(api_data.get('Registration', '-'))),
                 'owner': clean_string(str(api_data.get('RegisteredOwners', '-'))),
                 'model': clean_string(str(api_data.get('Type', '-'))),
+                'icao_type_code': clean_string(str(api_data.get('ICAOTypeCode', '-'))),
+                'operator_flag': clean_string(str(api_data.get('OperatorFlagCode', '-'))),
                 'last_api_error': 0,
             }
 
         if response.status_code == 404:
             return None
         if response.status_code == 429:
-            print(f"Rate limited for {icao}")
-            return {'last_api_error': time.time()}
-        if response.status_code >= 500:
-            print(f"Server error {response.status_code} for {icao}")
-            backup_result = try_backup_api(icao)
-            if backup_result:
-                return backup_result
-            return {'last_api_error': time.time()}
-        return try_backup_api(icao)
-    except requests.exceptions.Timeout:
-        print(f"API timeout for {icao}")
-        return {'last_api_error': time.time()}
-    except requests.exceptions.ConnectionError:
-        print(f"API connection error for {icao}")
-        return {'last_api_error': time.time()}
+            return {'last_api_error': time.time(), 'api_error_msg': '429 rate limited'}
+        return {'last_api_error': time.time(), 'api_error_msg': f'{response.status_code} server error'}
+    except requests.exceptions.Timeout as e:
+        return {'last_api_error': time.time(), 'api_error_msg': f'ReadTimeout: {e}'}
+    except requests.exceptions.ConnectionError as e:
+        return {'last_api_error': time.time(), 'api_error_msg': f'ConnectionError: {e}'}
     except Exception as e:
-        print(f"API error for {icao}: {e}")
-        return {'last_api_error': time.time()}
+        return {'last_api_error': time.time(), 'api_error_msg': f'{type(e).__name__}: {e}'}
 
 
 def upload_to_firebase(plane_data):

@@ -30,7 +30,7 @@ _log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message
 log.addHandler(_log_handler)
 
 from modules import draw_text, functions, airport_db
-from modules.data_utils import append_directional_hit, append_sample, clear_top_graph_history, load_today_heatmap_hits, load_top_graph_history, persist_top_graph_sample, prune_history, save_plane_to_csv
+from modules.data_utils import append_directional_hit, append_sample, clear_top_graph_history, load_today_heatmap_hits, load_top_graph_history, persist_top_graph_sample, prune_history, save_plane_to_csv, save_flight_history
 from modules.network_utils import can_retry_plane_api, check_network, fetch_plane_info, upload_to_firebase
 from modules.ui_utils import draw_altitude_filter, draw_filter_action_buttons, draw_line_graph, draw_polar_coverage_plot, draw_radar_heatmap, plane_matches_altitude_filter, plane_matches_distance_filter
 
@@ -38,6 +38,9 @@ from modules.ui_utils import draw_altitude_filter, draw_filter_action_buttons, d
 _config = functions.load_config()
 _config.setdefault('cameraHost', '192.168.0.157')
 _config.setdefault('cameraPort', 12345)
+_config.setdefault('flightHistoryDir', './flight_history')
+
+FLIGHT_HISTORY_DIR = _config['flightHistoryDir']
 
 CAMERA_SERVER = (_config['cameraHost'], int(_config['cameraPort']))
 READSB_JSON_PATH = "/run/readsb/aircraft.json"
@@ -219,6 +222,8 @@ ICAO_CACHE_MAX_AGE_DAYS = 30
 icao_cache = {}
 api_pending = set()
 api_request_timestamps = deque()
+_recent_message_times = {}
+_DEDUP_WINDOW_SECONDS = 120
 API_RATE_LIMIT_WINDOW = 300
 API_RATE_LIMIT_MAX = 900
 
@@ -292,6 +297,16 @@ def add_message(message):
     is_error = any(token in lower_body for token in ["error", "failed", "timeout", "warning", "invalid"])
     if is_error and len(body) > 50:
         body = body[:47] + "..."
+
+    now = time.time()
+    last_shown = _recent_message_times.get(body)
+    if last_shown is not None and now - last_shown < _DEDUP_WINDOW_SECONDS:
+        return
+    _recent_message_times[body] = now
+    if len(_recent_message_times) > 200:
+        cutoff = now - _DEDUP_WINDOW_SECONDS
+        for k in [k for k, t in _recent_message_times.items() if t < cutoff]:
+            del _recent_message_times[k]
 
     timestamp = strftime("%H:%M", localtime())
     formatted_message = f"{timestamp} {body}"
@@ -378,8 +393,10 @@ def api_worker_thread(icao, plane_data):
             with data_lock:
                 if icao in active_planes:
                     active_planes[icao]['api_retries_exhausted'] = True
-        elif 'last_api_error' in api_data:
+        elif api_data.get('last_api_error'):
             # Network/server error - increment retry count and stop after 3 total attempts
+            error_msg = api_data.get('api_error_msg', 'API error')
+            add_message(f"{error_msg}")
             with data_lock:
                 if icao in active_planes:
                     retry_count = active_planes[icao].get('api_retry_count', 0) + 1
@@ -733,6 +750,7 @@ def adsb_processing_thread():
 
     last_stats_upload = time.time()
     last_network_check = time.time()
+    last_flight_history_save = time.time()
     readsb_connected = False
 
     while tracker_running:
@@ -895,6 +913,12 @@ def adsb_processing_thread():
                 tracker_plane_photo_cache.pop(icao, None)
                 tracker_plane_photo_meta_cache.pop(icao, None)
 
+        if current_time - last_flight_history_save >= 60:
+            with data_lock:
+                planes_snapshot = {icao: dict(plane) for icao, plane in active_planes.items()}
+            save_flight_history(planes_snapshot, history_dir=FLIGHT_HISTORY_DIR)
+            last_flight_history_save = current_time
+
         if current_time - last_stats_upload > 60 and not offline and network_available:
             try:
                 try:
@@ -1028,6 +1052,11 @@ def main():
     view_center_lat = _config['myLat']
     view_center_lon = _config['myLon']
     plane_headings = {}
+    log_scroll_offset = 0
+    log_scroll_dragging = False
+    log_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
+    log_scroll_drag_start_y = 0
+    log_scroll_drag_start_offset = 0
 
     while True:
         current_time = time.time()
@@ -1036,6 +1065,9 @@ def main():
         logs_y = pic_y + pic_h + 10
         logs_h = (height - 50) - logs_y - 10
         filter_panel_rect = pygame.Rect(SIDEBAR_X + (SIDEBAR_WIDTH // 2) + 5, (315 // 2) + 68 + 150, int(SIDEBAR_WIDTH / 2) - 5, int(logs_h // 2))
+        log_bottom_row_y = filter_panel_rect.bottom + 10
+        log_h_early = (height - 10) - log_bottom_row_y
+        log_box_rect = pygame.Rect(filter_panel_rect.left, log_bottom_row_y, filter_panel_rect.width, log_h_early)
         heatmap_button_rect = pygame.Rect(filter_panel_rect.right - 48, filter_panel_rect.top + 8, 40, 40)
         hide_planes_button_rect = pygame.Rect(filter_panel_rect.right - 48, filter_panel_rect.top + 56, 40, 40)
         reset_filters_button_rect = pygame.Rect(filter_panel_rect.right - 48, filter_panel_rect.top + 104, 40, 40)
@@ -1091,12 +1123,22 @@ def main():
                 pygame.quit()
                 exit()
             
-            #Mouse wheel zoom
+            #Mouse wheel zoom / log scroll
             elif event.type == pygame.MOUSEWHEEL:
                 mouse_x, mouse_y = pygame.mouse.get_pos()
-                
+
+                if log_box_rect.collidepoint(mouse_x, mouse_y):
+                    with data_lock:
+                        total_msgs = len(message_queue)
+                    lines_per_page = max(1, (log_h_early - 4) // 11)
+                    max_scroll = max(0, total_msgs - lines_per_page)
+                    if event.y > 0:
+                        log_scroll_offset = min(log_scroll_offset + 3, max_scroll)
+                    elif event.y < 0:
+                        log_scroll_offset = max(log_scroll_offset - 3, 0)
+
                 #Only zoom if mouse is over the radar area
-                if RADAR_RECT.collidepoint(mouse_x, mouse_y):
+                elif RADAR_RECT.collidepoint(mouse_x, mouse_y):
                     last_scroll_time = current_time  #Track scroll time to prevent accidental clicks
                     old_range = range_km
                     
@@ -1127,6 +1169,7 @@ def main():
                 if event.button == 1:
                     altitude_filter_dragging = False
                     distance_filter_dragging = False
+                    log_scroll_dragging = False
 
             elif event.type == pygame.MOUSEMOTION:
                 if altitude_filter_dragging:
@@ -1135,6 +1178,17 @@ def main():
                 if distance_filter_dragging:
                     clamped_y = max(distance_slider_track_rect.top, min(distance_slider_track_rect.bottom, event.pos[1]))
                     distance_filter_threshold_km = clamp_distance_threshold((1.0 - ((clamped_y - distance_slider_track_rect.top) / max(1, distance_slider_track_rect.height))) * 1000.0)
+                if log_scroll_dragging:
+                    with data_lock:
+                        total_msgs_drag = len(message_queue)
+                    lines_per_page_drag = max(1, (log_h_early - 4) // 11)
+                    max_scroll_drag = max(0, total_msgs_drag - lines_per_page_drag)
+                    track_usable = log_h_early - 2 - max(20, int(log_h_early * lines_per_page_drag / max(1, total_msgs_drag)))
+                    if track_usable > 0 and max_scroll_drag > 0:
+                        dy = event.pos[1] - log_scroll_drag_start_y
+                        delta = int(dy / track_usable * max_scroll_drag)
+                        # drag down → newer (lower offset); drag up → older (higher offset)
+                        log_scroll_offset = max(0, min(max_scroll_drag, log_scroll_drag_start_offset - delta))
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 #Only process left mouse button (button 1), ignore middle/right clicks and scroll buttons
@@ -1147,7 +1201,13 @@ def main():
                     
                 last_tap_time = time.time()
                 mouse_x, mouse_y = pygame.mouse.get_pos()
-                
+
+                if log_scrollbar_thumb_rect.collidepoint(mouse_x, mouse_y):
+                    log_scroll_dragging = True
+                    log_scroll_drag_start_y = mouse_y
+                    log_scroll_drag_start_offset = log_scroll_offset
+                    continue
+
                 if heatmap_button_rect.collidepoint(mouse_x, mouse_y):
                     radar_heatmap_enabled = not radar_heatmap_enabled
                     add_message("Heatmap enabled" if radar_heatmap_enabled else "Heatmap disabled")
@@ -1867,19 +1927,39 @@ def main():
         pygame.draw.circle(window, tracker_status_colour, (sx + 5, dot_y + sp * 2 + 9), 5)
         draw_text.normal(window, "Camera", stat_font, (255, 255, 255), sx + 14, dot_y + sp * 2)
 
-        log_max_w = filter_panel_rect.width - 10
-        y_msg = bottom_row_y + 2
+        _LOG_SCROLLBAR_W = 6
+        log_scrollbar_track_rect = pygame.Rect(filter_panel_rect.right - _LOG_SCROLLBAR_W - 1, bottom_row_y + 1, _LOG_SCROLLBAR_W, log_h - 2)
+        log_max_w = filter_panel_rect.width - 10 - _LOG_SCROLLBAR_W - 2
+        lines_per_page = max(1, (log_h - 4) // 11)
         with data_lock:
-            for message in message_queue[-60:]:
-                colour = (200, 200, 200)
-                if "WARNING" in message:
-                    colour = (255, 0, 0)
-                elif "NEW" in message:
-                    colour = (0, 255, 0)
-                draw_text.normal(window, truncate_log_text(str(message), text_font3, log_max_w), text_font3, colour, filter_panel_rect.left + 5, y_msg)
-                y_msg += 11
-                if y_msg > bottom_row_y + log_h - 10:
-                    break
+            all_msgs = list(message_queue)
+        total_msgs = len(all_msgs)
+        max_scroll = max(0, total_msgs - lines_per_page)
+        log_scroll_offset = min(log_scroll_offset, max_scroll)
+        start_idx = max(0, total_msgs - lines_per_page - log_scroll_offset)
+        end_idx = max(0, total_msgs - log_scroll_offset)
+        y_msg = bottom_row_y + 2
+        for message in all_msgs[start_idx:end_idx]:
+            colour = (200, 200, 200)
+            if "WARNING" in message:
+                colour = (255, 0, 0)
+            elif "NEW" in message:
+                colour = (0, 255, 0)
+            draw_text.normal(window, truncate_log_text(str(message), text_font3, log_max_w), text_font3, colour, filter_panel_rect.left + 5, y_msg)
+            y_msg += 11
+            if y_msg > bottom_row_y + log_h - 10:
+                break
+        # Draw scrollbar
+        pygame.draw.rect(window, (40, 40, 40), log_scrollbar_track_rect)
+        if total_msgs > lines_per_page:
+            thumb_h = max(20, int(log_scrollbar_track_rect.height * lines_per_page / total_msgs))
+            thumb_travel = log_scrollbar_track_rect.height - thumb_h
+            # offset=0 (newest) → thumb at bottom; offset=max_scroll (oldest) → thumb at top
+            thumb_y = log_scrollbar_track_rect.top + int(thumb_travel * (1.0 - log_scroll_offset / max_scroll)) if max_scroll > 0 else log_scrollbar_track_rect.top + thumb_travel
+            log_scrollbar_thumb_rect = pygame.Rect(log_scrollbar_track_rect.left, thumb_y, _LOG_SCROLLBAR_W, thumb_h)
+            pygame.draw.rect(window, (140, 140, 140), log_scrollbar_thumb_rect)
+        else:
+            log_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
 
         #CAMERA IMAGE
         cam_w = int((SIDEBAR_WIDTH / 2) - 10)

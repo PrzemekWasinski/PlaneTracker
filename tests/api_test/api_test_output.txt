@@ -1,0 +1,153 @@
+API test — 2026-06-21 15:26:20
+
+============================================================
+ICAO: 407CB2
+============================================================
+
+--- hexdb.io ---
+  Status: 200  (156ms)
+  Response: {
+    "ModeS": "407CB2",
+    "Registration": "G-RUKF",
+    "Manufacturer": "Boeing",
+    "ICAOTypeCode": "B738",
+    "Type": "737NG 8AS/W",
+    "RegisteredOwners": "Ryanair UK",
+    "OperatorFlagCode": "RUK"
+}
+
+--- OpenSky ---
+  Status: 410  (116ms)
+  Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+
+============================================================
+ICAO: 40643B
+============================================================
+
+--- hexdb.io ---
+  Status: 200  (112ms)
+  Response: {
+    "ModeS": "40643B",
+    "Registration": "G-EZTY",
+    "Manufacturer": "Airbus",
+    "ICAOTypeCode": "A320",
+    "Type": "A320 214",
+    "RegisteredOwners": "easyJet UK",
+    "OperatorFlagCode": "EZY"
+}
+
+--- OpenSky ---
+  Status: 410  (96ms)
+  Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+
+============================================================
+ICAO: 40753C
+============================================================
+
+--- hexdb.io ---
+  Status: 200  (116ms)
+  Response: {
+    "ModeS": "40753C",
+    "Registration": "G-JZBO",
+    "Manufacturer": "Boeing",
+    "ICAOTypeCode": "B738",
+    "Type": "737NG 800/W",
+    "RegisteredOwners": "Jet2",
+    "OperatorFlagCode": "EXS"
+}
+
+--- OpenSky ---
+  Status: 410  (118ms)
+  Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+
+============================================================
+ICAO: AC3C0E
+============================================================
+
+--- hexdb.io ---
+  Status: 200  (140ms)
+  Response: {
+    "ModeS": "AC3C0E",
+    "Registration": "N888FD",
+    "Manufacturer": "Boeing",
+    "ICAOTypeCode": "B77L",
+    "Type": "777 F",
+    "RegisteredOwners": "FedEx Express",
+    "OperatorFlagCode": "FDX"
+}
+
+--- OpenSky ---
+  Status: 410  (108ms)
+  Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+
+============================================================
+ICAO: 40095D
+============================================================
+
+--- hexdb.io ---
+  Status: 200  (100ms)
+  Response: {
+    "ModeS": "40095D",
+    "Registration": "G-TTOB",
+    "Manufacturer": "Airbus",
+    "ICAOTypeCode": "A320",
+    "Type": "A320 232",
+    "RegisteredOwners": "British Airways",
+    "OperatorFlagCode": "BAW"
+}
+
+--- OpenSky ---
+  Status: 410  (118ms)
+  Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+
+============================================================
+ICAO: 4CAE8D
+============================================================
+
+--- hexdb.io ---
+  Status: 404  (346ms)
+  Response: "{\"status\":\"404\",\"error\":\"Aircraft not found.\"}"
+
+--- OpenSky ---
+  Status: 410  (153ms)
+  Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+
+============================================================
+ICAO: 06A13A
+============================================================
+
+--- hexdb.io ---
+  Status: 200  (106ms)
+  Response: {
+    "ModeS": "06A13A",
+    "Registration": "A7-BAX",
+    "Manufacturer": "Boeing",
+    "ICAOTypeCode": "B77W",
+    "Type": "777 3DZER",
+    "RegisteredOwners": "Qatar Airways",
+    "OperatorFlagCode": "QTR"
+}
+
+--- OpenSky ---
+  Status: 410  (126ms)
+  Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+
+============================================================
+ICAO: AAA6E4
+============================================================
+
+--- hexdb.io ---
+  Status: 200  (109ms)
+  Response: {
+    "ModeS": "AAA6E4",
+    "Registration": "N786AV",
+    "Manufacturer": "Boeing",
+    "ICAOTypeCode": "B788",
+    "Type": "787 8",
+    "RegisteredOwners": "Avianca",
+    "OperatorFlagCode": "AVA"
+}
+
+--- OpenSky ---
+  Status: 410  (112ms)
+  Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"

@@ -71,22 +71,55 @@ def parse_aircraft(aircraft):
     else:
         baro_rate = "-"
 
+    def _num(val, cast=float):
+        if val is None:
+            return "-"
+        try:
+            return cast(val)
+        except (TypeError, ValueError):
+            return "-"
+
     return {
         'icao': hex_code,
+        'flight': flight,
+        'squawk': aircraft.get('squawk') or '-',
+        'category': aircraft.get('category') or '-',
+        'emergency': aircraft.get('emergency') or '-',
         'altitude': altitude,
+        'alt_geom': _num(aircraft.get('alt_geom'), int),
+        'baro_rate': baro_rate,
+        'geom_rate': _num(aircraft.get('geom_rate'), int),
         'speed': speed,
+        'ias': _num(aircraft.get('ias'), int),
+        'tas': _num(aircraft.get('tas'), int),
+        'mach': _num(aircraft.get('mach')),
         'track': track,
+        'track_rate': _num(aircraft.get('track_rate')),
+        'mag_heading': _num(aircraft.get('mag_heading')),
+        'true_heading': _num(aircraft.get('true_heading')),
+        'nav_heading': _num(aircraft.get('nav_heading')),
+        'nav_altitude_fms': _num(aircraft.get('nav_altitude_fms'), int),
+        'nav_altitude_mcp': _num(aircraft.get('nav_altitude_mcp'), int),
+        'nav_qnh': _num(aircraft.get('nav_qnh')),
+        'nav_modes': str(aircraft.get('nav_modes') or '-'),
+        'roll': _num(aircraft.get('roll')),
+        'oat': _num(aircraft.get('oat'), int),
+        'tat': _num(aircraft.get('tat'), int),
+        'wd': _num(aircraft.get('wd'), int),
+        'ws': _num(aircraft.get('ws'), int),
+        'rssi': _num(aircraft.get('rssi')),
+        'seen': _num(aircraft.get('seen')),
+        'seen_pos': _num(aircraft.get('seen_pos')),
+        'messages': _num(aircraft.get('messages'), int),
         'lat': lat,
         'lon': lon,
-        'flight': flight,
-        'baro_rate': baro_rate,
         'manufacturer': '-',
         'registration': '-',
+        'owner': '-',
+        'model': '-',
         'icao_type_code': '-',
         'code_mode_s': '-',
         'operator_flag': '-',
-        'owner': '-',
-        'model': '-',
         'spotted_at': datetime.now().strftime('%H:%M:%S'),
         'last_update_time': time.time(),
     }
@@ -452,6 +485,133 @@ def persist_top_graph_sample(active_count_history, total_seen_history, active_co
         return top_graph_last_bucket
 
     return bucket_time
+
+
+FLIGHT_HISTORY_FIELDS = [
+    'icao', 'flight', 'squawk', 'category', 'emergency',
+    'manufacturer', 'registration', 'model', 'owner',
+    'altitude', 'alt_geom', 'baro_rate', 'geom_rate',
+    'speed', 'ias', 'tas', 'mach',
+    'track', 'track_rate', 'mag_heading', 'true_heading', 'nav_heading',
+    'nav_altitude_fms', 'nav_altitude_mcp', 'nav_qnh', 'nav_modes',
+    'roll', 'oat', 'tat', 'wd', 'ws',
+    'rssi', 'seen', 'seen_pos', 'messages',
+    'lat', 'lon',
+    'location_history',
+    'first_seen', 'last_seen',
+]
+
+FLIGHT_HISTORY_DIR = './flight_history'
+
+
+def save_flight_history(planes_dict, history_dir=FLIGHT_HISTORY_DIR):
+    if not planes_dict:
+        return
+
+    today = datetime.today().strftime('%Y-%m-%d')
+    csv_path = os.path.join(history_dir, f'{today}.csv')
+    temp_path = csv_path + '.tmp'
+    lock_path = csv_path + '.lock'
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    try:
+        os.makedirs(history_dir, exist_ok=True)
+        with open(lock_path, 'w') as lock_file:
+            import fcntl
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                existing = {}
+                if os.path.exists(csv_path):
+                    with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            if row.get('icao'):
+                                existing[row['icao']] = row
+
+                for icao, plane in planes_dict.items():
+                    if (plane.get('flight', '-') == '-' or
+                            plane.get('manufacturer', '-') == '-' or
+                            plane.get('model', '-') == '-' or
+                            plane.get('owner', '-') == '-' or
+                            plane.get('registration', '-') == '-' or
+                            plane.get('altitude', '-') == '-' or
+                            plane.get('speed', '-') == '-' or
+                            plane.get('track', '-') == '-'):
+                        continue
+
+                    merged_history = {}
+                    if icao in existing:
+                        raw = existing[icao].get('location_history', '{}')
+                        if raw and raw != '{}':
+                            try:
+                                merged_history = ast.literal_eval(raw)
+                            except Exception:
+                                pass
+
+                    plane_history = plane.get('location_history', {})
+                    if isinstance(plane_history, dict):
+                        merged_history.update(plane_history)
+
+                    first_seen = existing.get(icao, {}).get('first_seen') or now_str
+
+                    existing[icao] = {
+                        'icao': icao,
+                        'flight': plane.get('flight', '-'),
+                        'squawk': plane.get('squawk', '-'),
+                        'category': plane.get('category', '-'),
+                        'emergency': plane.get('emergency', '-'),
+                        'manufacturer': plane.get('manufacturer', '-'),
+                        'registration': plane.get('registration', '-'),
+                        'model': plane.get('model', '-'),
+                        'owner': plane.get('owner', '-'),
+                        'altitude': plane.get('altitude', '-'),
+                        'alt_geom': plane.get('alt_geom', '-'),
+                        'baro_rate': plane.get('baro_rate', '-'),
+                        'geom_rate': plane.get('geom_rate', '-'),
+                        'speed': plane.get('speed', '-'),
+                        'ias': plane.get('ias', '-'),
+                        'tas': plane.get('tas', '-'),
+                        'mach': plane.get('mach', '-'),
+                        'track': plane.get('track', '-'),
+                        'track_rate': plane.get('track_rate', '-'),
+                        'mag_heading': plane.get('mag_heading', '-'),
+                        'true_heading': plane.get('true_heading', '-'),
+                        'nav_heading': plane.get('nav_heading', '-'),
+                        'nav_altitude_fms': plane.get('nav_altitude_fms', '-'),
+                        'nav_altitude_mcp': plane.get('nav_altitude_mcp', '-'),
+                        'nav_qnh': plane.get('nav_qnh', '-'),
+                        'nav_modes': plane.get('nav_modes', '-'),
+                        'roll': plane.get('roll', '-'),
+                        'oat': plane.get('oat', '-'),
+                        'tat': plane.get('tat', '-'),
+                        'wd': plane.get('wd', '-'),
+                        'ws': plane.get('ws', '-'),
+                        'rssi': plane.get('rssi', '-'),
+                        'seen': plane.get('seen', '-'),
+                        'seen_pos': plane.get('seen_pos', '-'),
+                        'messages': plane.get('messages', '-'),
+                        'lat': plane.get('last_lat', plane.get('lat', '-')),
+                        'lon': plane.get('last_lon', plane.get('lon', '-')),
+                        'location_history': str(merged_history),
+                        'first_seen': first_seen,
+                        'last_seen': now_str,
+                    }
+
+                with open(temp_path, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=FLIGHT_HISTORY_FIELDS, extrasaction='ignore')
+                    writer.writeheader()
+                    for row in existing.values():
+                        writer.writerow(row)
+                os.replace(temp_path, csv_path)
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except Exception as e:
+        print(f"Flight history save error: {e}")
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
 
 
 def save_plane_to_csv(icao, plane_data):

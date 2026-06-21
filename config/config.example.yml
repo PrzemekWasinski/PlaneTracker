@@ -19,6 +19,9 @@ defaultMode: false
 #offline mode for plane tracking
 offlineMode: false
 
+#where csvs are stored
+flightHistoryDir: ./flight_history
+
 #Local network services
 cameraHost: 192.168.0.157
 cameraPort: 12345
