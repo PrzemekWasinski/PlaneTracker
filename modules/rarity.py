@@ -7,10 +7,10 @@ _COLOURS = [
     (255, 255, 255),  # 1  - white
     (255, 255, 255),  # 2  - white
     (255, 255, 255),  # 3  - white
-    (0, 255, 0),      # 4  - green
-    (0, 255, 0),      # 5  - green
-    (255, 255, 0),    # 6  - yellow
-    (255, 255, 0),    # 7  - yellow
+    (255, 255, 0),    # 4  - yellow
+    (255, 255, 0),    # 5  - yellow
+    (0, 255, 0),      # 6  - green
+    (0, 255, 0),      # 7  - green
     (255, 0, 0),      # 8  - red
     (255, 0, 0),      # 9  - red
     (255, 0, 255),    # 10 - magenta
@@ -19,11 +19,11 @@ _COLOURS = [
 
 def _percentile_to_rating(p):
     # p=1.0 → most common in history, p=0.0 → rarest in history
-    if p >= 0.90: return 1   # white  – top 10% most common
-    if p >= 0.50: return 4   # green  – above median (50th–90th)
-    if p >= 0.20: return 6   # yellow – below median (20th–50th)
-    if p >= 0.05: return 8   # red    – rare (5th–20th)
-    return 10                # magenta – very rare / unseen
+    if p >= 0.93: return 1   # white  – top 7%: dominant types (A320, 737 core)
+    if p >= 0.88: return 4   # yellow – 88th–93rd: fairly common (787, A321 variants)
+    if p >= 0.70: return 6   # green  – 70th–88th: moderately seen (777, EMB-190, ATR, A220)
+    if p >= 0.10: return 8   # red    – 10th–70th: rare (count 1–2, C-130s, MD-11s etc.)
+    return 10                # magenta – bottom 10%
 
 
 def build_model_counts(history_dir='./flight_history'):

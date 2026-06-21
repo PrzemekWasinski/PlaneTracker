@@ -1666,10 +1666,11 @@ def main():
 
                         #Draw lines connecting the trajectory points
                         if len(trajectory_points) > 1:
-                            pygame.draw.lines(window, rarity_col, False, trajectory_points)
+                            trajectory_col = tuple(max(0, c - 50) for c in rarity_col)
+                            pygame.draw.lines(window, trajectory_col, False, trajectory_points)
 
                             for i in trajectory_points:
-                                pygame.draw.circle(window, (255, 255, 0), i, 1)
+                                pygame.draw.circle(window, rarity_col, i, 1)
 
                 coloured = plane_icon_white.copy()
                 coloured.fill((*rarity_col, fade_value), special_flags=pygame.BLEND_RGBA_MULT)
@@ -1770,6 +1771,39 @@ def main():
 
         active_peak = max((sample[1] for sample in active_count_history), default=0)
         active_y_max = max(10, ((active_peak + 10 + 9) // 10) * 10)
+
+        rarity_counts = {10: 0, 8: 0, 6: 0, 4: 0, 1: 0}
+        for _icao, _display_data in displayed_planes_snapshot.items():
+            _plane = _display_data.get("plane_data", {})
+            if not plane_matches_altitude_filter(_plane, altitude_filter_threshold, altitude_filter_above):
+                continue
+            if not plane_matches_distance_filter(_plane, distance_filter_threshold_km, distance_filter_outside):
+                continue
+            _rating = get_rarity_rating(_plane.get('model', '-'), model_ratings)
+            if _rating >= 10:
+                rarity_counts[10] += 1
+            elif _rating >= 8:
+                rarity_counts[8] += 1
+            elif _rating >= 6:
+                rarity_counts[6] += 1
+            elif _rating >= 4:
+                rarity_counts[4] += 1
+            else:
+                rarity_counts[1] += 1
+
+        _rarity_tiers = [
+            (10, (255, 0, 255)),
+            (8,  (255, 0, 0)),
+            (6,  (0, 255, 0)),
+            (4,  (255, 255, 0)),
+            (1,  (255, 255, 255)),
+        ]
+        _col_x = active_graph_rect.left - 28
+        _tier_h = active_graph_rect.height // len(_rarity_tiers)
+        for _i, (_tier, _col) in enumerate(_rarity_tiers):
+            _ly = active_graph_rect.top + _i * _tier_h + (_tier_h - 11) // 2
+            draw_text.normal(window, str(rarity_counts[_tier]), text_font3, _col, _col_x, _ly)
+
         draw_line_graph(window, active_graph_rect, list(active_count_history), active_y_max, draw_text, text_font3, pygame, active_peak, current_time, TOP_GRAPH_HISTORY_SECONDS, "ACTIVE")
         total_peak = max((sample[1] for sample in total_seen_history), default=0)
         total_y_max = max(100, ((total_peak + 100 + 99) // 100) * 100)
