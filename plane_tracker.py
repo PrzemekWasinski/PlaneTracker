@@ -32,6 +32,7 @@ log.addHandler(_log_handler)
 from modules import draw_text, functions, airport_db
 from modules.data_utils import append_directional_hit, append_sample, clear_top_graph_history, load_today_heatmap_hits, load_top_graph_history, persist_top_graph_sample, prune_history, save_plane_to_csv, save_flight_history
 from modules.network_utils import can_retry_plane_api, check_network, fetch_plane_info, upload_to_firebase
+from modules.rarity import build_model_counts, compute_ratings, get_rarity_colour, get_rarity_rating
 from modules.ui_utils import draw_altitude_filter, draw_filter_action_buttons, draw_line_graph, draw_polar_coverage_plot, draw_radar_heatmap, plane_matches_altitude_filter, plane_matches_distance_filter
 
 #Load config
@@ -41,6 +42,8 @@ _config.setdefault('cameraPort', 12345)
 _config.setdefault('flightHistoryDir', './flight_history')
 
 FLIGHT_HISTORY_DIR = _config['flightHistoryDir']
+model_counts = build_model_counts(FLIGHT_HISTORY_DIR)
+model_ratings = compute_ratings(model_counts)
 
 CAMERA_SERVER = (_config['cameraHost'], int(_config['cameraPort']))
 READSB_JSON_PATH = "/run/readsb/aircraft.json"
@@ -148,6 +151,8 @@ hide_plane_mode_icon = pygame.image.load(os.path.join("textures", "icons", "hide
 clear_filters_icon = pygame.image.load(os.path.join("textures", "icons", "clear_filters.png")).convert_alpha()
 plane_icon = pygame.image.load(os.path.join("textures", "icons", "plane_icon.png")).convert_alpha()
 selected_plane_icon = pygame.image.load(os.path.join("textures", "icons", "selected_plane.png")).convert_alpha()
+plane_icon_white = plane_icon.copy()
+plane_icon_white.fill((255, 255, 255), special_flags=pygame.BLEND_RGB_MAX)
 
 #Radar display settings
 RADAR_RECT = pygame.Rect(0, 0, 1080, 1080)
@@ -419,6 +424,12 @@ def api_worker_thread(icao, plane_data):
                 save_plane_to_csv(icao, plane_snapshot)
                 upload_to_firebase(plane_snapshot)
                 save_icao_cache_entry(icao, api_data)
+                _model = api_data.get('model', '-')
+                if _model and _model != '-':
+                    model_counts[_model] = model_counts.get(_model, 0) + 1
+                    _new_ratings = compute_ratings(model_counts)
+                    model_ratings.clear()
+                    model_ratings.update(_new_ratings)
     finally:
         api_pending.discard(icao)
 
@@ -916,6 +927,8 @@ def adsb_processing_thread():
         if current_time - last_flight_history_save >= 60:
             with data_lock:
                 planes_snapshot = {icao: dict(plane) for icao, plane in active_planes.items()}
+            for _plane in planes_snapshot.values():
+                _plane['rating'] = get_rarity_rating(_plane.get('model', '-'), model_ratings)
             save_flight_history(planes_snapshot, history_dir=FLIGHT_HISTORY_DIR)
             last_flight_history_save = current_time
 
@@ -1038,7 +1051,7 @@ def main():
     
     start_time = time.time()
     top_graph_last_bucket = load_top_graph_history(active_count_history, total_seen_history, TOP_GRAPH_HISTORY_DIR, TOP_GRAPH_HISTORY_SECONDS, start_time)
-    heatmap_hits = deque(load_today_heatmap_hits(TOP_GRAPH_HISTORY_DIR, start_time))
+    heatmap_hits = deque(load_today_heatmap_hits(FLIGHT_HISTORY_DIR, start_time))
     range_km = 50
     last_local_stats_refresh = 0
     last_health_log = start_time
@@ -1049,6 +1062,8 @@ def main():
     cpu_percentage = 0
     disk_free = functions.get_disk_free()
     
+    current_graph_date = datetime.today().strftime('%Y-%m-%d')
+
     view_center_lat = _config['myLat']
     view_center_lon = _config['myLon']
     plane_headings = {}
@@ -1060,6 +1075,16 @@ def main():
 
     while True:
         current_time = time.time()
+
+        _today = datetime.today().strftime('%Y-%m-%d')
+        if _today != current_graph_date:
+            current_graph_date = _today
+            with data_lock:
+                active_count_history.clear()
+                total_seen_history.clear()
+            clear_top_graph_history(TOP_GRAPH_HISTORY_DIR)
+            top_graph_last_bucket = None
+
         pic_y = 377
         pic_h = 203
         logs_y = pic_y + pic_h + 10
@@ -1589,6 +1614,9 @@ def main():
                 if tracking_mode_auto and auto_track_rect is not None and auto_track_rect.collidepoint(int(x), int(y)):
                     current_auto_track_icaos.add(icao)
 
+                rating = get_rarity_rating(plane.get('model', '-'), model_ratings)
+                rarity_col = get_rarity_colour(rating)
+
                 if icao == target_icao:
                     location_history = plane.get("location_history", {})
                     if location_history and isinstance(location_history, dict) and len(location_history) > 1:
@@ -1638,21 +1666,20 @@ def main():
 
                         #Draw lines connecting the trajectory points
                         if len(trajectory_points) > 1:
-                            pygame.draw.lines(window, (0, 255, 255), False, trajectory_points)
+                            pygame.draw.lines(window, rarity_col, False, trajectory_points)
 
                             for i in trajectory_points:
                                 pygame.draw.circle(window, (255, 255, 0), i, 1)
 
-                base_icon = selected_plane_icon if icao == target_icao else plane_icon
-                coloured = base_icon.copy()
-                coloured.set_alpha(fade_value)
+                coloured = plane_icon_white.copy()
+                coloured.fill((*rarity_col, fade_value), special_flags=pygame.BLEND_RGBA_MULT)
                 rotated_image = pygame.transform.rotate(coloured, heading)
                 new_rect = rotated_image.get_rect(center=(x, y))
                 window.blit(rotated_image, new_rect)
                 current_plane_rects[icao] = new_rect
 
                 #Labels
-                label_colour = (0, 255, 255) if icao == target_icao else (0, 255, 0)
+                label_colour = rarity_col
                 flight = plane.get("flight", "-")
                 display_label = flight if (flight and flight != "-") else icao
                 if hide_planes_mode == 0:
@@ -1814,9 +1841,12 @@ def main():
             model_display = (f"{mfg} {model}")[:28] if mfg != '-' and model != '-' else "Unidentified Aircraft"
             owner_display = owner[:28] if owner != '-' else "Unidentified Airline"
 
+            p_rating = get_rarity_rating(model, model_ratings)
+            p_rarity_col = get_rarity_colour(p_rating)
+
             id_y = separator_y + 10
-            draw_text.normal(window, model_display, plane_identity_font, (255, 255, 255), col1, id_y)
-            draw_text.normal(window, owner_display, plane_identity_font, (255, 255, 255), col1, id_y + 16)
+            draw_text.normal(window, model_display, plane_identity_font, p_rarity_col, col1, id_y)
+            draw_text.normal(window, owner_display, plane_identity_font, p_rarity_col, col1, id_y + 16)
 
             spacing = 18
             stat_y = 290
@@ -1834,17 +1864,17 @@ def main():
             spd = p_data.get('speed', '-')
             total_hits = p_data.get("total_hit_count", 0)
 
-            draw_text.normal(window, f"FLIGHT: {flight if flight != '-' else 'N/A'}", stat_font, (200, 200, 200), lx, stat_y)
-            draw_text.normal(window, f"HEX: {target_icao or 'N/A'}", stat_font, (200, 200, 200), rx, stat_y)
+            draw_text.normal(window, f"FLIGHT: {flight if flight != '-' else 'N/A'}", stat_font, p_rarity_col, lx, stat_y)
+            draw_text.normal(window, f"HEX: {target_icao or 'N/A'}", stat_font, p_rarity_col, rx, stat_y)
 
-            draw_text.normal(window, f"ALT: {f'{alt}ft' if alt != '-' else 'N/A'}", stat_font, (200, 200, 200), lx, stat_y + spacing)
-            draw_text.normal(window, f"REG: {reg if reg != '-' else 'N/A'}", stat_font, (200, 200, 200), rx, stat_y + spacing)
+            draw_text.normal(window, f"ALT: {f'{alt}ft' if alt != '-' else 'N/A'}", stat_font, p_rarity_col, lx, stat_y + spacing)
+            draw_text.normal(window, f"REG: {reg if reg != '-' else 'N/A'}", stat_font, p_rarity_col, rx, stat_y + spacing)
 
             baro_display = f"{baro_rate:+d}fpm" if baro_rate != '-' else 'N/A'
-            draw_text.normal(window, f"BARO: {baro_display}", stat_font, (200, 200, 200), lx, stat_y + spacing * 2)
-            draw_text.normal(window, f"SPD: {f'{rnd(spd)}kt' if spd != '-' else 'N/A'}", stat_font, (200, 200, 200), rx, stat_y + spacing * 2)
+            draw_text.normal(window, f"BARO: {baro_display}", stat_font, p_rarity_col, lx, stat_y + spacing * 2)
+            draw_text.normal(window, f"SPD: {f'{rnd(spd)}kt' if spd != '-' else 'N/A'}", stat_font, p_rarity_col, rx, stat_y + spacing * 2)
 
-            draw_text.normal(window, f"HITS: {int(total_hits)}", stat_font, (200, 200, 200), lx, stat_y + spacing * 3)
+            draw_text.normal(window, f"HITS: {int(total_hits)}", stat_font, p_rarity_col, lx, stat_y + spacing * 3)
 
             dist_km = p_data.get('distance', '-')
             if dist_km != '-' and dist_km is not None:
@@ -1855,7 +1885,7 @@ def main():
                     dist_text = 'N/A'
             else:
                 dist_text = 'N/A'
-            draw_text.normal(window, f"DST: {dist_text}", stat_font, (200, 200, 200), rx, stat_y + spacing * 3)
+            draw_text.normal(window, f"DST: {dist_text}", stat_font, p_rarity_col, rx, stat_y + spacing * 3)
         else:
             draw_text.center(window, "NO PLANE SELECTED", text_font1, (100, 100, 100), SIDEBAR_X + SIDEBAR_WIDTH // 2, separator_y + 80)
 

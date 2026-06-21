@@ -127,7 +127,7 @@ def parse_aircraft(aircraft):
 
 def get_stats(home_lat=None, home_lon=None):
     today = datetime.today().strftime('%Y-%m-%d')
-    csv_path = os.path.join('./stats_history', f'{today}.csv')
+    csv_path = os.path.join('./stats_history', 'stats.csv')
 
     default_stats = {
         'total': 0,
@@ -158,6 +158,8 @@ def get_stats(home_lat=None, home_lon=None):
                     furthest_detected = None
 
                     for row in reader:
+                        if not row.get('timestamp', '').startswith(today):
+                            continue
                         altitude_raw = row.get('altitude', '').strip()
                         try:
                             altitude_value = int(altitude_raw)
@@ -283,7 +285,7 @@ def aggregate_directional_hits(history, sector_count, now=None, time_window_seco
     return totals
 
 
-def load_today_heatmap_hits(history_dir='./stats_history', now=None):
+def load_today_heatmap_hits(history_dir='./flight_history', now=None):
     now = now or time.time()
     today = datetime.fromtimestamp(now).strftime('%Y-%m-%d')
     csv_path = os.path.join(history_dir, f'{today}.csv')
@@ -398,8 +400,7 @@ def load_recent_heatmap_history(history_dir='./stats_history', history_seconds=2
 
 
 def get_top_graph_history_path(history_dir, now=None):
-    now = datetime.fromtimestamp(now or time.time())
-    return os.path.join(history_dir, f"graph_history_{now.strftime('%Y-%m-%d')}.csv")
+    return os.path.join(history_dir, 'graph_history.csv')
 
 
 def load_top_graph_history(active_count_history, total_seen_history, history_dir, history_seconds, now=None):
@@ -489,7 +490,7 @@ def persist_top_graph_sample(active_count_history, total_seen_history, active_co
 
 FLIGHT_HISTORY_FIELDS = [
     'icao', 'flight', 'squawk', 'category', 'emergency',
-    'manufacturer', 'registration', 'model', 'owner',
+    'manufacturer', 'registration', 'model', 'owner', 'rating',
     'altitude', 'alt_geom', 'baro_rate', 'geom_rate',
     'speed', 'ias', 'tas', 'mach',
     'track', 'track_rate', 'mag_heading', 'true_heading', 'nav_heading',
@@ -564,6 +565,7 @@ def save_flight_history(planes_dict, history_dir=FLIGHT_HISTORY_DIR):
                         'registration': plane.get('registration', '-'),
                         'model': plane.get('model', '-'),
                         'owner': plane.get('owner', '-'),
+                        'rating': plane.get('rating', '-'),
                         'altitude': plane.get('altitude', '-'),
                         'alt_geom': plane.get('alt_geom', '-'),
                         'baro_rate': plane.get('baro_rate', '-'),
@@ -624,9 +626,8 @@ def save_plane_to_csv(icao, plane_data):
         if manufacturer == '-' or model == '-' or owner == '-' or registration == '-':
             return
 
-        today = datetime.today().strftime('%Y-%m-%d')
         stats_dir = './stats_history'
-        csv_path = os.path.join(stats_dir, f'{today}.csv')
+        csv_path = os.path.join(stats_dir, 'stats.csv')
         os.makedirs(stats_dir, exist_ok=True)
 
         lock_path = csv_path + '.lock'
