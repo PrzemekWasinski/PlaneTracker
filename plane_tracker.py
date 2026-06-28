@@ -951,52 +951,34 @@ def adsb_processing_thread():
                     cpu_temp = 0
                 ram_percentage = psutil.virtual_memory()[2]
 
-                #Upload flight stats with improved error handling
-                today = datetime.today().strftime("%Y-%m-%d")
-                stats_ref = db.reference(f"{today}/stats")
+                new_stats = functions.get_stats(
+                    _config['myLat'], _config['myLon'],
+                    flight_history_dir=FLIGHT_HISTORY_DIR,
+                )
+                total = new_stats.get('total', 0) if new_stats else 0
 
-                new_stats = functions.get_stats(flight_history_dir=FLIGHT_HISTORY_DIR)
+                if total > 0:
+                    today = datetime.today().strftime("%Y-%m-%d")
+                    top_airline = (new_stats['top_airline']['name'] or '') if new_stats else ''
+                    top_mfr = (new_stats['top_manufacturer']['name'] or '') if new_stats else ''
+                    top_model = (new_stats['top_model']['name'] or '') if new_stats else ''
+                    top_aircraft = f"{top_mfr} {top_model}".strip()
+                    furthest = new_stats.get('furthest_detected')
 
-                #More detailed validation and logging
-                if new_stats is None:
-                    log.warning("Stats validation: get_stats() returned None")
-                    add_message("Stats: get_stats() returned None")
-                elif not isinstance(new_stats, dict):
-                    log.warning(f"Stats validation: get_stats() returned non-dict: {type(new_stats)}")
-                    add_message(f"Stats: invalid type {type(new_stats)}")
-                else:
-                    #Check if stats has required fields
-                    total = new_stats.get('total')
-                    if total is None:
-                        log.warning(f"Stats validation: 'total' field missing from stats: {new_stats}")
-                        add_message("Stats: missing 'total' field")
-                    elif not isinstance(total, (int, float)):
-                        log.warning(f"Stats validation: 'total' is not numeric: {total} (type: {type(total)})")
-                        add_message(f"Stats: total not numeric")
-                    elif total == 0:
-                        log.warning("Stats validation: total is 0 - likely read error")
-                        add_message("Stats: total is 0 (skipping)")
-                    else:
-                        #Stats look valid proceed with upload
-                        current_stats = stats_ref.get()
+                    day_ref = db.reference(today)
+                    day_ref.set({
+                        'total_aircraft': total,
+                        'top_airline': top_airline,
+                        'top_aircraft': top_aircraft,
+                        'furthest_aircraft_km': round(furthest, 2) if furthest is not None else None,
+                    })
+                    add_message(f"Firebase updated: {total} aircraft")
 
-                        #Upload if no existing stats or new total is higher/equal
-                        if current_stats is None:
-                            stats_ref.set(new_stats)
-                            add_message(f"Stats uploaded: {total} total")
-                        elif new_stats.get('total', 0) >= current_stats.get('total', 0):
-                            stats_ref.set(new_stats)
-                            add_message(f"Stats updated: {total} total")
-                        else:
-                            log.info(f"Stats upload skipped: new total ({total}) < current ({current_stats.get('total')})")
-                            add_message(f"Stats: skip (new < current)")
-
-                #Upload device stats
-                device_stats_ref = db.reference("device_stats")
-                device_stats_ref.update({
-                    "cpu_temp": cpu_temp,
-                    "ram_percentage": ram_percentage,
-                    "run": True
+                db.reference("device_stats").set({
+                    "cpu_temp": round(cpu_temp, 1),
+                    "ram_percentage": round(ram_percentage, 1),
+                    "cpu_percentage": round(cpu_percentage, 1),
+                    "disk_free_gb": disk_free,
                 })
 
                 last_stats_upload = current_time
@@ -1755,7 +1737,7 @@ def main():
                             pygame.draw.lines(window, trajectory_col, False, trajectory_points)
 
                             for i in trajectory_points[:-1]:
-                                pygame.draw.circle(window, (173, 216, 230), i, 1)
+                                pygame.draw.circle(window, (0, 255, 255), i, 1)
 
                 coloured = plane_icon_white.copy()
                 coloured.fill((*rarity_col, fade_value), special_flags=pygame.BLEND_RGBA_MULT)
@@ -1978,17 +1960,17 @@ def main():
             spd = p_data.get('speed', '-')
             total_hits = p_data.get("total_hit_count", 0)
 
-            draw_text.normal(window, f"FLIGHT: {flight if flight != '-' else 'N/A'}", stat_font, p_rarity_col, lx, stat_y)
-            draw_text.normal(window, f"HEX: {target_icao or 'N/A'}", stat_font, p_rarity_col, rx, stat_y)
+            draw_text.normal(window, f"FLIGHT: {flight if flight != '-' else 'N/A'}", stat_font, (255, 255, 255), lx, stat_y)
+            draw_text.normal(window, f"HEX: {target_icao or 'N/A'}", stat_font, (255, 255, 255), rx, stat_y)
 
-            draw_text.normal(window, f"ALT: {f'{alt}ft' if alt != '-' else 'N/A'}", stat_font, p_rarity_col, lx, stat_y + spacing)
-            draw_text.normal(window, f"REG: {reg if reg != '-' else 'N/A'}", stat_font, p_rarity_col, rx, stat_y + spacing)
+            draw_text.normal(window, f"ALT: {f'{alt}ft' if alt != '-' else 'N/A'}", stat_font, (255, 255, 255), lx, stat_y + spacing)
+            draw_text.normal(window, f"REG: {reg if reg != '-' else 'N/A'}", stat_font, (255, 255, 255), rx, stat_y + spacing)
 
             baro_display = f"{baro_rate:+d}fpm" if baro_rate != '-' else 'N/A'
-            draw_text.normal(window, f"BARO: {baro_display}", stat_font, p_rarity_col, lx, stat_y + spacing * 2)
-            draw_text.normal(window, f"SPD: {f'{rnd(spd)}kt' if spd != '-' else 'N/A'}", stat_font, p_rarity_col, rx, stat_y + spacing * 2)
+            draw_text.normal(window, f"BARO: {baro_display}", stat_font, (255, 255, 255), lx, stat_y + spacing * 2)
+            draw_text.normal(window, f"SPD: {f'{rnd(spd)}kt' if spd != '-' else 'N/A'}", stat_font, (255, 255, 255), rx, stat_y + spacing * 2)
 
-            draw_text.normal(window, f"HITS: {int(total_hits)}", stat_font, p_rarity_col, lx, stat_y + spacing * 3)
+            draw_text.normal(window, f"HITS: {int(total_hits)}", stat_font, (255, 255, 255), lx, stat_y + spacing * 3)
 
             dist_km = p_data.get('distance', '-')
             if dist_km != '-' and dist_km is not None:
@@ -1999,7 +1981,7 @@ def main():
                     dist_text = 'N/A'
             else:
                 dist_text = 'N/A'
-            draw_text.normal(window, f"DST: {dist_text}", stat_font, p_rarity_col, rx, stat_y + spacing * 3)
+            draw_text.normal(window, f"DST: {dist_text}", stat_font, (255, 255, 255), rx, stat_y + spacing * 3)
         else:
             draw_text.center(window, "NO PLANE SELECTED", text_font1, (100, 100, 100), SIDEBAR_X + SIDEBAR_WIDTH // 2, separator_y + 80)
 

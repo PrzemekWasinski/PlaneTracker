@@ -20,3 +20,6 @@ firebase.json
 
 #Log files
 *.log
+
+#Firebase data and scripts
+firebase/

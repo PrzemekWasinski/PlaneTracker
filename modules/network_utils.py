@@ -82,43 +82,7 @@ def fetch_plane_info(icao):
 
 
 def upload_to_firebase(plane_data):
-    try:
-        manufacturer = plane_data.get('manufacturer', '-')
-        model = plane_data.get('model', '-')
-        registration = plane_data.get('registration', '-')
-        owner = plane_data.get('owner', '-')
-
-        if manufacturer == '-' or model == '-' or registration == '-' or owner == '-':
-            return
-
-        firebase_data = {}
-        for key in plane_data:
-            if key not in ['location_history', 'last_update_time', 'last_lat', 'last_lon', 'last_api_error']:
-                firebase_data[key] = make_json_safe(plane_data[key])
-
-        min_str = strftime('%M', localtime())
-        hour = strftime('%H', localtime())
-        time_10 = f"{hour}:{min_str[:-1]}0"
-        today = datetime.today().strftime('%Y-%m-%d')
-
-        from firebase_admin import db
-
-        path = f"{today}/{time_10}/{manufacturer}-{model}-({registration})-{owner}"
-        ref = db.reference(path)
-        current_data = ref.get()
-        if current_data is None:
-            ref.set(firebase_data)
-        else:
-            new_data = {}
-            for key in firebase_data:
-                value = firebase_data[key]
-                if value != '-' and value != []:
-                    new_data[key] = value
-                elif key in current_data:
-                    new_data[key] = current_data[key]
-            ref.update(new_data)
-    except Exception as e:
-        print(f"Firebase error: {e}")
+    pass
 
 
 def send_to_tracker(lat, lon, alt_ft, add_message=None, host='192.168.0.157', port=12345):
