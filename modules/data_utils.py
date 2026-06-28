@@ -125,9 +125,18 @@ def parse_aircraft(aircraft):
     }
 
 
-def get_stats(home_lat=None, home_lon=None):
+_STATS_NUMERIC_COLS = [
+    "altitude", "alt_geom", "speed", "mach", "baro_rate", "geom_rate",
+    "ias", "tas", "lat", "lon", "messages", "rssi", "roll", "oat", "tat",
+]
+
+
+def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history'):
+    import pandas as pd
+    import glob as _glob
+
     today = datetime.today().strftime('%Y-%m-%d')
-    csv_path = os.path.join('./stats_history', 'stats.csv')
+    csv_path_today = os.path.join(flight_history_dir, f'{today}.csv')
 
     default_stats = {
         'total': 0,
@@ -137,102 +146,132 @@ def get_stats(home_lat=None, home_lon=None):
         'manufacturer_breakdown': {},
         'furthest_detected': None,
         'highest_detected': None,
+        'unique_airlines': 0,
+        'unique_models': 0,
+        'unique_manufacturers': 0,
+        'emergencies_count': 0,
+        'avg_altitude': None,
+        'avg_speed': None,
+        'max_speed': None,
+        'avg_mach': None,
         'last_updated': strftime('%H:%M:%S', localtime()),
     }
 
-    if not os.path.exists(csv_path):
-        return default_stats
+    if os.path.exists(csv_path_today):
+        csv_path = csv_path_today
+    else:
+        all_files = sorted(_glob.glob(os.path.join(flight_history_dir, '????-??-??.csv')))
+        if not all_files:
+            return default_stats
+        csv_path = all_files[-1]
 
     try:
-        lock_path = csv_path + '.lock'
-        with open(lock_path, 'w') as lock_file:
-            import fcntl
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH)
+        df = pd.read_csv(csv_path, low_memory=False)
 
-            try:
-                with open(csv_path, 'r', newline='', encoding='utf-8') as file:
-                    reader = csv.DictReader(file)
-                    planes = []
+        # Coerce numeric columns exactly as stats.py does
+        for col in _STATS_NUMERIC_COLS:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col].replace("-", pd.NA), errors="coerce")
 
-                    highest_detected = None
-                    furthest_detected = None
+        # Parse timestamps exactly as stats.py does
+        for col in ("first_seen", "last_seen"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
 
-                    for row in reader:
-                        if not row.get('timestamp', '').startswith(today):
-                            continue
-                        altitude_raw = row.get('altitude', '').strip()
-                        try:
-                            altitude_value = int(altitude_raw)
-                            if highest_detected is None or altitude_value > highest_detected:
-                                highest_detected = altitude_value
-                        except (TypeError, ValueError, AttributeError):
-                            pass
+        # Clean string columns exactly as stats.py does
+        for col in ("owner", "manufacturer", "model", "category", "emergency", "registration"):
+            if col in df.columns:
+                df[col] = df[col].replace(["-", "none", "None", ""], pd.NA)
 
-                        icao = row.get('icao', '-') or '-'
-                        history_raw = row.get('location_history', '{}')
-                        if home_lat is not None and home_lon is not None and history_raw and history_raw != '{}':
-                            try:
-                                location_history = ast.literal_eval(history_raw)
-                                for coords in location_history.values():
-                                    if not isinstance(coords, (list, tuple)) or len(coords) < 2:
-                                        continue
-                                    distance_km = calculate_distance(float(home_lat), float(home_lon), float(coords[0]), float(coords[1]))
-                                    if furthest_detected is None or distance_km > furthest_detected:
-                                        furthest_detected = distance_km
-                            except (ValueError, SyntaxError, TypeError):
-                                pass
+        # Deduplicate exactly as stats.py does
+        if "icao" in df.columns and "first_seen" in df.columns:
+            df = df.drop_duplicates(subset=["icao", "first_seen"])
 
-                        if not row.get('icao'):
-                            continue
+        total = len(df)
 
-                        manufacturer = row.get('manufacturer', '').strip()
-                        model = row.get('model', '').strip()
-                        airline = row.get('airline', '').strip()
+        def _top(series):
+            counts = series.dropna().value_counts()
+            if counts.empty:
+                return None, 0
+            return counts.index[0], int(counts.iloc[0])
 
-                        if not manufacturer or not model or not airline or manufacturer == '-' or model == '-' or airline == '-':
-                            continue
+        top_model_name, top_model_count = _top(df['model']) if 'model' in df.columns else (None, 0)
+        top_mfr_name, top_mfr_count = _top(df['manufacturer']) if 'manufacturer' in df.columns else (None, 0)
+        top_airline_name, top_airline_count = _top(df['owner']) if 'owner' in df.columns else (None, 0)
 
-                        planes.append({
-                            'manufacturer': manufacturer,
-                            'model': model,
-                            'airline': airline,
-                        })
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        mfr_breakdown = {}
+        if 'manufacturer' in df.columns:
+            mfr_breakdown = {
+                clean_string(str(k)): int(v)
+                for k, v in df['manufacturer'].dropna().value_counts().items()
+            }
 
-        if not planes:
-            default_stats['furthest_detected'] = furthest_detected
-            default_stats['highest_detected'] = highest_detected
-            return default_stats
+        unique_airlines = int(df['owner'].nunique()) if 'owner' in df.columns else 0
+        unique_models = int(df['model'].nunique()) if 'model' in df.columns else 0
+        unique_manufacturers = int(df['manufacturer'].nunique()) if 'manufacturer' in df.columns else 0
+        emergencies_count = int(df['emergency'].notna().sum()) if 'emergency' in df.columns else 0
 
-        model_counter = Counter(p['model'] for p in planes)
-        manufacturer_counter = Counter(p['manufacturer'] for p in planes)
-        airline_counter = Counter(p['airline'] for p in planes)
+        avg_altitude = None
+        highest = None
+        if 'altitude' in df.columns:
+            val = df['altitude'].mean()
+            if pd.notna(val):
+                avg_altitude = int(round(float(val)))
+            alt_max = df['altitude'].max()
+            if pd.notna(alt_max):
+                highest = int(alt_max)
 
-        top_model = model_counter.most_common(1)[0] if model_counter else (None, 0)
-        top_manufacturer = manufacturer_counter.most_common(1)[0] if manufacturer_counter else (None, 0)
-        top_airline = airline_counter.most_common(1)[0] if airline_counter else (None, 0)
+        avg_speed = None
+        max_speed = None
+        if 'speed' in df.columns:
+            val = df['speed'].mean()
+            if pd.notna(val):
+                avg_speed = int(round(float(val)))
+            val = df['speed'].max()
+            if pd.notna(val):
+                max_speed = int(round(float(val)))
 
-        clean_manufacturer_breakdown = {
-            clean_string(key): value for key, value in manufacturer_counter.items()
-        }
+        avg_mach = None
+        if 'mach' in df.columns:
+            val = df['mach'].mean()
+            if pd.notna(val):
+                avg_mach = round(float(val), 3)
+
+        furthest = None
+        if home_lat is not None and home_lon is not None and 'lat' in df.columns and 'lon' in df.columns:
+            valid = df[df['lat'].notna() & df['lon'].notna()]
+            best = 0.0
+            for _, row in valid.iterrows():
+                try:
+                    d = calculate_distance(float(home_lat), float(home_lon), row['lat'], row['lon'])
+                    if d > best:
+                        best = d
+                except (ValueError, TypeError):
+                    pass
+            if best > 0:
+                furthest = best
 
         return {
-            'total': len(planes),
-            'top_model': {'name': top_model[0], 'count': top_model[1]},
-            'top_manufacturer': {'name': top_manufacturer[0], 'count': top_manufacturer[1]},
-            'top_airline': {'name': top_airline[0], 'count': top_airline[1]},
-            'manufacturer_breakdown': clean_manufacturer_breakdown,
-            'furthest_detected': furthest_detected,
-            'highest_detected': highest_detected,
+            'total': total,
+            'top_model': {'name': top_model_name, 'count': top_model_count},
+            'top_manufacturer': {'name': top_mfr_name, 'count': top_mfr_count},
+            'top_airline': {'name': top_airline_name, 'count': top_airline_count},
+            'manufacturer_breakdown': mfr_breakdown,
+            'furthest_detected': furthest,
+            'highest_detected': highest,
+            'unique_airlines': unique_airlines,
+            'unique_models': unique_models,
+            'unique_manufacturers': unique_manufacturers,
+            'emergencies_count': emergencies_count,
+            'avg_altitude': avg_altitude,
+            'avg_speed': avg_speed,
+            'max_speed': max_speed,
+            'avg_mach': avg_mach,
             'last_updated': strftime('%H:%M:%S', localtime()),
         }
 
-    except (FileNotFoundError, PermissionError, csv.Error, UnicodeDecodeError) as e:
-        print(f"Error reading stats file: {e}")
-        return default_stats
     except Exception as e:
-        print(f"Unexpected error getting stats: {e}")
+        print(f"Error reading stats: {e}")
         return default_stats
 
 

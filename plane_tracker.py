@@ -36,11 +36,11 @@ from modules.rarity import build_model_counts, compute_ratings, get_rarity_colou
 from modules.ui_utils import draw_altitude_filter, draw_filter_action_buttons, draw_line_graph, draw_polar_coverage_plot, draw_radar_heatmap, draw_rarity_filter, plane_matches_altitude_filter, plane_matches_distance_filter
 
 RARITY_TIERS = [
-    (10, (255, 0, 255), "Legendary"),
-    (8,  (255, 0, 0),   "Rare"),
-    (6,  (0, 255, 0),   "Uncommon"),
-    (4,  (255, 255, 0), "Common"),
-    (1,  (255, 255, 255), "Standard"),
+    (10, (255, 0, 255), "LGND"),
+    (8,  (255, 0, 0),   "RARE"),
+    (6,  (0, 255, 0),   "UCMN"),
+    (4,  (255, 255, 0), "CMMN"),
+    (1,  (255, 255, 255), "STND"),
 ]
 
 #Load config
@@ -895,6 +895,8 @@ def adsb_processing_thread():
                                 plane_data[field] = cache_entry[field]
                         active_planes[icao] = plane_data
                         displayed_planes[icao]["plane_data"] = plane_data
+                        if plane_data.get('manufacturer', '-') != '-' and plane_data.get('owner', '-') != '-':
+                            save_plane_to_csv(icao, plane_data)
                     add_message(f"NEW plane {icao}")
 
                 if not effective_offline and plane_data["manufacturer"] == "-" and not plane_data.get("api_retries_exhausted") and icao not in api_pending and can_retry_plane_api(plane_data, PLANE_API_RETRY_DELAY) and current_api_count < API_RATE_LIMIT_MAX:
@@ -953,7 +955,7 @@ def adsb_processing_thread():
                 today = datetime.today().strftime("%Y-%m-%d")
                 stats_ref = db.reference(f"{today}/stats")
 
-                new_stats = functions.get_stats()
+                new_stats = functions.get_stats(flight_history_dir=FLIGHT_HISTORY_DIR)
 
                 #More detailed validation and logging
                 if new_stats is None:
@@ -1041,12 +1043,59 @@ def clamp_distance_threshold(distance_km):
     return max(0.0, min(1000.0, float(distance_km)))
 
 
+_flight_stats_cache = {
+    'total': 0,
+    'top_model': {'name': None, 'count': 0},
+    'top_manufacturer': {'name': None, 'count': 0},
+    'top_airline': {'name': None, 'count': 0},
+    'manufacturer_breakdown': {},
+    'furthest_detected': None,
+    'highest_detected': None,
+    'unique_airlines': 0,
+    'unique_models': 0,
+    'unique_manufacturers': 0,
+    'emergencies_count': 0,
+    'avg_altitude': None,
+    'avg_speed': None,
+    'max_speed': None,
+    'avg_mach': None,
+    'last_updated': None,
+}
+_flight_stats_lock = threading.Lock()
+
+
+def _load_flight_stats():
+    global _flight_stats_cache
+    try:
+        new_stats = functions.get_stats(
+            _config['myLat'], _config['myLon'],
+            flight_history_dir=FLIGHT_HISTORY_DIR,
+        )
+        if new_stats and new_stats.get('total', 0) > 0:
+            with _flight_stats_lock:
+                _flight_stats_cache = new_stats
+        else:
+            log.warning(f"Flight stats: get_stats returned empty (total={new_stats.get('total') if new_stats else None})")
+    except Exception as e:
+        log.warning(f"Flight stats refresh error: {e}", exc_info=True)
+
+
+def flight_stats_refresh_thread():
+    _load_flight_stats()
+    while tracker_running:
+        time.sleep(60)
+        _load_flight_stats()
+
+
 #Start ADSB processing thread
 processing_thread = threading.Thread(target=adsb_processing_thread, daemon=True)
 processing_thread.start()
 
 tracker_stats_worker = threading.Thread(target=tracker_stats_thread, daemon=True)
 tracker_stats_worker.start()
+
+flight_stats_worker = threading.Thread(target=flight_stats_refresh_thread, daemon=True)
+flight_stats_worker.start()
 
 #THREAD 1: Main UI Thread
 def main():
@@ -1062,9 +1111,7 @@ def main():
     top_graph_last_bucket = load_top_graph_history(active_count_history, total_seen_history, TOP_GRAPH_HISTORY_DIR, TOP_GRAPH_HISTORY_SECONDS, start_time)
     heatmap_hits = deque(load_today_heatmap_hits(FLIGHT_HISTORY_DIR, start_time))
     range_km = 50
-    last_local_stats_refresh = 0
     last_health_log = start_time
-    cached_flight_stats = functions.get_stats(_config['myLat'], _config['myLon'])
     last_system_stats_refresh = 0
     cpu_temp = 0
     ram_percentage = 0
@@ -1151,10 +1198,6 @@ def main():
             disk_free = functions.get_disk_free()
             last_system_stats_refresh = current_time
 
-        if current_time - last_local_stats_refresh >= 5:
-            cached_flight_stats = functions.get_stats(_config['myLat'], _config['myLon'])
-            last_local_stats_refresh = current_time
-        
         displayed_planes_snapshot = snapshot_displayed_planes()
 
         #Handle events
@@ -1712,7 +1755,7 @@ def main():
                             pygame.draw.lines(window, trajectory_col, False, trajectory_points)
 
                             for i in trajectory_points[:-1]:
-                                pygame.draw.circle(window, rarity_col, i, 1)
+                                pygame.draw.circle(window, (173, 216, 230), i, 1)
 
                 coloured = plane_icon_white.copy()
                 coloured.fill((*rarity_col, fade_value), special_flags=pygame.BLEND_RGBA_MULT)
@@ -1805,7 +1848,8 @@ def main():
         active_graph_rect = pygame.Rect(SIDEBAR_X + 300, sys_y, 240, 130)
         total_graph_rect = pygame.Rect(SIDEBAR_X + 580, sys_y, 240, 130)
 
-        stats = cached_flight_stats
+        with _flight_stats_lock:
+            stats = dict(_flight_stats_cache)
         total_seen = stats.get('total', 0)
 
         if displayed_count > 0 or (current_time - start_time) >= GRAPH_SAMPLE_INTERVAL:
@@ -1839,25 +1883,32 @@ def main():
         draw_line_graph(window, total_graph_rect, list(total_seen_history), total_y_max, draw_text, text_font3, pygame, total_peak, current_time, TOP_GRAPH_HISTORY_SECONDS, "TOTAL")
 
         #Flight stats
-        top_mfg = stats['top_manufacturer']['name'] or 'Unknown'
-        top_type = stats['top_model']['name'] or 'Unknown'
-        top_airline = stats['top_airline']['name'] or 'Unknown'
         furthest_detected = stats.get('furthest_detected')
         highest_detected = stats.get('highest_detected')
-        furthest_text = format_distance(furthest_detected, distance_unit, 1) if furthest_detected is not None else 'Unknown'
-        highest_text = f"{highest_detected}ft" if highest_detected is not None else 'Unknown'
+        furthest_text = format_distance(furthest_detected, distance_unit, 1) if furthest_detected is not None else '-'
+        highest_text = f"{highest_detected:,}ft" if highest_detected is not None else '-'
+        avg_alt_text = f"{stats['avg_altitude']:,}ft" if stats.get('avg_altitude') is not None else '-'
+        avg_spd_text = f"{stats['avg_speed']}kts" if stats.get('avg_speed') is not None else '-'
+        max_spd_text = f"{stats['max_speed']}kts" if stats.get('max_speed') is not None else '-'
+        avg_mach_text = f"{stats['avg_mach']:.3f}" if stats.get('avg_mach') is not None else '-'
+        top_airline_name = (stats['top_airline']['name'] or '-')[:16]
+        top_mfr_name = (stats['top_manufacturer']['name'] or '-')[:14]
+        top_model_name = (stats['top_model']['name'] or '-')[:14]
 
-        api_count_5min = get_api_request_count_5min(current_time)
-        api_count_colour = (255, 50, 50) if api_count_5min >= API_RATE_LIMIT_MAX else (255, 255, 255)
         _sp = 17
-        draw_text.normal(window, f"Total Seen: {stats['total']}", text_font3, (255, 255, 255), col1, sys_y)
-        draw_text.normal(window, f"Top Mfg: {top_mfg}", text_font3, (255, 255, 255), col1, sys_y + _sp)
-        draw_text.normal(window, f"Top Type: {top_type}", text_font3, (255, 255, 255), col1, sys_y + _sp * 2)
-        draw_text.normal(window, f"Top Airline: {top_airline}", text_font3, (255, 255, 255), col1, sys_y + _sp * 3)
-        draw_text.normal(window, f"Active Count: {displayed_count}", text_font3, (0, 255, 0), col1, sys_y + _sp * 4)
-        draw_text.normal(window, f"Furthest Detected: {furthest_text}", text_font3, (255, 255, 255), col1, sys_y + _sp * 5)
-        draw_text.normal(window, f"Highest Detected: {highest_text}", text_font3, (255, 255, 255), col1, sys_y + _sp * 6)
-        draw_text.normal(window, f"API Requests 5 Min: {api_count_5min}", text_font3, api_count_colour, col1, sys_y + _sp * 7)
+        col_r = col1 + 155
+        draw_text.normal(window, f"Total Seen: {stats['total']:,}", text_font3, (255, 255, 255), col1, sys_y)
+        draw_text.normal(window, f"Airlines: {stats['unique_airlines']}", text_font3, (255, 255, 255), col1, sys_y + _sp)
+        draw_text.normal(window, f"Models: {stats['unique_models']}", text_font3, (255, 255, 255), col1, sys_y + _sp * 2)
+        draw_text.normal(window, f"Active: {displayed_count}", text_font3, (0, 255, 0), col1, sys_y + _sp * 3)
+        draw_text.normal(window, f"Top Manufacturer: {top_mfr_name}", text_font3, (255, 255, 255), col1, sys_y + _sp * 4 + 15)
+        draw_text.normal(window, f"Top Airline: {top_airline_name}", text_font3, (255, 255, 255), col1, sys_y + _sp * 5 + 15)
+        draw_text.normal(window, f"Top Aircraft: {top_mfr_name} {top_model_name}", text_font3, (255, 255, 255), col1, sys_y + _sp * 6 + 15)
+
+        draw_text.normal(window, f"Max Spd: {max_spd_text}", text_font3, (255, 255, 255), col_r, sys_y)
+        draw_text.normal(window, f"Avg Mach: {avg_mach_text}", text_font3, (255, 255, 255), col_r, sys_y + _sp)
+        draw_text.normal(window, f"Furthest: {furthest_text}", text_font3, (255, 255, 255), col_r, sys_y + _sp * 2)
+        draw_text.normal(window, f"Highest: {highest_text}", text_font3, (255, 255, 255), col_r, sys_y + _sp * 3)
 
         #Sperator 2
         separator_y = (315 // 2) + 68

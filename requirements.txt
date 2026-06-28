@@ -1,5 +1,0 @@
-firebase_admin==7.4.0
-psutil==7.2.2
-pygame==2.6.1
-PyYAML==6.0.3
-requests==2.34.2
