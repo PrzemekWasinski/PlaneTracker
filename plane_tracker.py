@@ -35,6 +35,28 @@ from modules.network_utils import can_retry_plane_api, check_network, fetch_plan
 from modules.rarity import build_model_counts, compute_ratings, get_rarity_colour, get_rarity_rating
 from modules.ui_utils import draw_altitude_filter, draw_filter_action_buttons, draw_line_graph, draw_polar_coverage_plot, draw_radar_heatmap, draw_rarity_filter, plane_matches_altitude_filter, plane_matches_distance_filter
 
+def _read_cpu_temp():
+    try:
+        sensors = psutil.sensors_temperatures()
+        for key in ("coretemp", "k10temp", "zenpower", "cpu_thermal", "acpitz"):
+            entries = sensors.get(key, [])
+            if entries:
+                pkg = next((e for e in entries if "package" in e.label.lower() or e.label == ""), entries[0])
+                return pkg.current
+    except (AttributeError, Exception):
+        pass
+    for zone_dir in sorted(Path("/sys/class/thermal").glob("thermal_zone*")):
+        try:
+            zone_type = (zone_dir / "type").read_text().strip()
+            if any(t in zone_type for t in ("pkg", "cpu", "core", "x86", "k10temp")):
+                return int((zone_dir / "temp").read_text()) / 1000
+        except OSError:
+            continue
+    try:
+        return int(open("/sys/class/thermal/thermal_zone0/temp").read()) / 1000
+    except OSError:
+        return 0
+
 RARITY_TIERS = [
     (10, (255, 0, 255), "LGND"),
     (8,  (255, 0, 0),   "RARE"),
@@ -945,10 +967,7 @@ def adsb_processing_thread():
 
         if current_time - last_stats_upload > 60 and not offline and network_available:
             try:
-                try:
-                    cpu_temp = int(open("/sys/class/thermal/thermal_zone0/temp").read()) / 1000
-                except OSError:
-                    cpu_temp = 0
+                cpu_temp = _read_cpu_temp()
                 ram_percentage = psutil.virtual_memory()[2]
 
                 new_stats = functions.get_stats(
@@ -959,27 +978,24 @@ def adsb_processing_thread():
 
                 if total > 0:
                     today = datetime.today().strftime("%Y-%m-%d")
-                    top_airline = (new_stats['top_airline']['name'] or '') if new_stats else ''
+                    top_airline_name = (new_stats['top_airline']['name'] or '') if new_stats else ''
+                    top_airline_count = (new_stats['top_airline']['count'] or 0) if new_stats else 0
                     top_mfr = (new_stats['top_manufacturer']['name'] or '') if new_stats else ''
                     top_model = (new_stats['top_model']['name'] or '') if new_stats else ''
+                    top_model_count = (new_stats['top_model']['count'] or 0) if new_stats else 0
                     top_aircraft = f"{top_mfr} {top_model}".strip()
                     furthest = new_stats.get('furthest_detected')
+                    furthest_plane = new_stats.get('furthest_plane')
 
                     day_ref = db.reference(today)
                     day_ref.set({
                         'total_aircraft': total,
-                        'top_airline': top_airline,
-                        'top_aircraft': top_aircraft,
+                        'top_airline': {'name': top_airline_name, 'count': top_airline_count},
+                        'top_aircraft': {'name': top_aircraft, 'count': top_model_count},
                         'furthest_aircraft_km': round(furthest, 2) if furthest is not None else None,
+                        'furthest_plane': furthest_plane,
                     })
                     add_message(f"Firebase updated: {total} aircraft")
-
-                db.reference("device_stats").set({
-                    "cpu_temp": round(cpu_temp, 1),
-                    "ram_percentage": round(ram_percentage, 1),
-                    "cpu_percentage": round(cpu_percentage, 1),
-                    "disk_free_gb": disk_free,
-                })
 
                 last_stats_upload = current_time
             except Exception as e:
@@ -1171,10 +1187,7 @@ def main():
 
         #Refresh expensive local stats on a timer instead of every frame
         if current_time - last_system_stats_refresh >= 1:
-            try:
-                cpu_temp = int(open("/sys/class/thermal/thermal_zone0/temp").read()) / 1000
-            except OSError:
-                cpu_temp = 0
+            cpu_temp = _read_cpu_temp()
             ram_percentage = psutil.virtual_memory()[2]
             cpu_percentage = psutil.cpu_percent()
             disk_free = functions.get_disk_free()

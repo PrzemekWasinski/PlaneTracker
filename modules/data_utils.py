@@ -145,6 +145,7 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
         'top_airline': {'name': None, 'count': 0},
         'manufacturer_breakdown': {},
         'furthest_detected': None,
+        'furthest_plane': None,
         'highest_detected': None,
         'unique_airlines': 0,
         'unique_models': 0,
@@ -238,18 +239,29 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
                 avg_mach = round(float(val), 3)
 
         furthest = None
+        furthest_plane = None
         if home_lat is not None and home_lon is not None and 'lat' in df.columns and 'lon' in df.columns:
             valid = df[df['lat'].notna() & df['lon'].notna()]
             best = 0.0
+            best_row = None
             for _, row in valid.iterrows():
                 try:
                     d = calculate_distance(float(home_lat), float(home_lon), row['lat'], row['lon'])
                     if d > best:
                         best = d
+                        best_row = row
                 except (ValueError, TypeError):
                     pass
             if best > 0:
                 furthest = best
+                if best_row is not None:
+                    furthest_plane = {
+                        'icao': str(best_row.get('icao', '-')),
+                        'flight': str(best_row.get('flight', '-')),
+                        'model': str(best_row.get('model', '-')),
+                        'airline': str(best_row.get('owner', '-')),
+                        'distance_km': round(best, 2),
+                    }
 
         return {
             'total': total,
@@ -258,6 +270,7 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
             'top_airline': {'name': top_airline_name, 'count': top_airline_count},
             'manufacturer_breakdown': mfr_breakdown,
             'furthest_detected': furthest,
+            'furthest_plane': furthest_plane,
             'highest_detected': highest,
             'unique_airlines': unique_airlines,
             'unique_models': unique_models,
