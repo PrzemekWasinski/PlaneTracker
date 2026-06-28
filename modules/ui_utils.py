@@ -51,6 +51,22 @@ def draw_step_button(surface, rect, direction, pygame_module):
 
 
 
+def draw_rarity_filter(surface, rarity_checkbox_rects, rarity_counts, rarity_filter_selected, rarity_tiers, draw_text_module, text_font, pygame_module):
+    for tier, col, label in rarity_tiers:
+        rect = rarity_checkbox_rects[tier]
+        count = rarity_counts.get(tier, 0)
+        is_active = tier in rarity_filter_selected
+
+        pygame_module.draw.rect(surface, (20, 20, 20), rect, 0)
+        pygame_module.draw.rect(surface, (160, 160, 160), rect, 1)
+        if is_active:
+            pygame_module.draw.line(surface, (0, 255, 0), (rect.left + 3, rect.centery), (rect.centerx, rect.bottom - 4), 2)
+            pygame_module.draw.line(surface, (0, 255, 0), (rect.centerx, rect.bottom - 4), (rect.right - 3, rect.top + 3), 2)
+
+        draw_text_module.normal(surface, label, text_font, col, rect.right + 5, rect.top - 1)
+        draw_text_module.normal(surface, str(count), text_font, col, rect.right + 38, rect.top - 1)
+
+
 def draw_altitude_filter(surface, panel_rect, altitude_checkbox_rect, altitude_slider_track_rect, altitude_slider_handle_rect, altitude_up_button_rect, altitude_down_button_rect, altitude_filter_threshold, altitude_filter_above, distance_checkbox_rect, distance_slider_track_rect, distance_slider_handle_rect, distance_up_button_rect, distance_down_button_rect, distance_filter_threshold_km, distance_filter_outside, distance_unit, distance_unit_rects, draw_text_module, stat_font, graph_time_font, text_font, pygame_module):
     pygame_module.draw.rect(surface, (100, 100, 100), panel_rect, 1)
 

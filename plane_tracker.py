@@ -33,7 +33,15 @@ from modules import draw_text, functions, airport_db
 from modules.data_utils import append_directional_hit, append_sample, clear_top_graph_history, load_today_heatmap_hits, load_top_graph_history, persist_top_graph_sample, prune_history, save_plane_to_csv, save_flight_history
 from modules.network_utils import can_retry_plane_api, check_network, fetch_plane_info, upload_to_firebase
 from modules.rarity import build_model_counts, compute_ratings, get_rarity_colour, get_rarity_rating
-from modules.ui_utils import draw_altitude_filter, draw_filter_action_buttons, draw_line_graph, draw_polar_coverage_plot, draw_radar_heatmap, plane_matches_altitude_filter, plane_matches_distance_filter
+from modules.ui_utils import draw_altitude_filter, draw_filter_action_buttons, draw_line_graph, draw_polar_coverage_plot, draw_radar_heatmap, draw_rarity_filter, plane_matches_altitude_filter, plane_matches_distance_filter
+
+RARITY_TIERS = [
+    (10, (255, 0, 255), "Legendary"),
+    (8,  (255, 0, 0),   "Rare"),
+    (6,  (0, 255, 0),   "Uncommon"),
+    (4,  (255, 255, 0), "Common"),
+    (1,  (255, 255, 255), "Standard"),
+]
 
 #Load config
 _config = functions.load_config()
@@ -200,6 +208,7 @@ altitude_filter_dragging = False
 distance_filter_threshold_km = 0.0
 distance_filter_outside = True
 distance_filter_dragging = False
+rarity_filter_selected = set()
 radar_heatmap_enabled = False
 hide_planes_mode = 0
 distance_unit = "NM"
@@ -1046,7 +1055,7 @@ def main():
     global animation_target_lat, animation_target_lon, last_scroll_time
     global altitude_filter_threshold, altitude_filter_above, altitude_filter_dragging
     global distance_filter_threshold_km, distance_filter_outside, distance_filter_dragging
-    global radar_heatmap_enabled, hide_planes_mode, distance_unit
+    global radar_heatmap_enabled, hide_planes_mode, distance_unit, rarity_filter_selected
     global tracker_capture_in_progress, tracker_photo_status, tracker_photo_plane_icao, tracking_mode_auto
     
     start_time = time.time()
@@ -1118,6 +1127,13 @@ def main():
         altitude_slider_down_rect = pygame.Rect(slider_track_rect.right + 30, slider_track_rect.top + 24, 18, 14)
         distance_slider_up_rect = pygame.Rect(distance_slider_track_rect.right + 30, distance_slider_track_rect.top + 6, 18, 14)
         distance_slider_down_rect = pygame.Rect(distance_slider_track_rect.right + 30, distance_slider_track_rect.top + 24, 18, 14)
+        _rarity_col_x = filter_panel_rect.centerx
+        _rarity_row_h = 22
+        _rarity_start_y = filter_panel_rect.top + 10
+        rarity_checkbox_rects = {
+            tier: pygame.Rect(_rarity_col_x, _rarity_start_y + i * _rarity_row_h, 14, 14)
+            for i, (tier, _col, _label) in enumerate(RARITY_TIERS)
+        }
         
         #Log health stats every 30 minutes
         if current_time - last_health_log >= 1800:
@@ -1258,7 +1274,20 @@ def main():
                     radar_heatmap_enabled = False
                     hide_planes_mode = 0
                     distance_unit = "NM"
+                    rarity_filter_selected.clear()
                     add_message("Filters reset to default")
+                    continue
+
+                _rarity_clicked = False
+                for _tier, _rrect in rarity_checkbox_rects.items():
+                    if _rrect.collidepoint(mouse_x, mouse_y):
+                        if _tier in rarity_filter_selected:
+                            rarity_filter_selected.discard(_tier)
+                        else:
+                            rarity_filter_selected.add(_tier)
+                        _rarity_clicked = True
+                        break
+                if _rarity_clicked:
                     continue
 
                 for unit_key, rect in distance_unit_rects.items():
@@ -1512,6 +1541,11 @@ def main():
             plane = display_data.get("plane_data", {})
             if not plane_matches_altitude_filter(plane, altitude_filter_threshold, altitude_filter_above):
                 continue
+            if rarity_filter_selected:
+                _r = get_rarity_rating(plane.get('model', '-'), model_ratings)
+                _t = 10 if _r >= 10 else (8 if _r >= 8 else (6 if _r >= 6 else (4 if _r >= 4 else 1)))
+                if _t not in rarity_filter_selected:
+                    continue
             lat = plane.get("last_lat")
             lon = plane.get("last_lon")
             if lat is not None and lon is not None:
@@ -1576,6 +1610,11 @@ def main():
                 continue
             if not plane_matches_distance_filter(plane, distance_filter_threshold_km, distance_filter_outside):
                 continue
+            if rarity_filter_selected:
+                _r = get_rarity_rating(plane.get('model', '-'), model_ratings)
+                _t = 10 if _r >= 10 else (8 if _r >= 8 else (6 if _r >= 6 else (4 if _r >= 4 else 1)))
+                if _t not in rarity_filter_selected:
+                    continue
             lat = plane.get("last_lat")
             lon = plane.get("last_lon")
             if lat is None or lon is None:
@@ -1664,12 +1703,15 @@ def main():
                                 add_message(f"Trajectory point error: {str(e)[:30]}")
                                 continue
 
+                        #Append current plane position to close the gap to the icon
+                        trajectory_points.append((int(x), int(y)))
+
                         #Draw lines connecting the trajectory points
                         if len(trajectory_points) > 1:
                             trajectory_col = tuple(max(0, c - 50) for c in rarity_col)
                             pygame.draw.lines(window, trajectory_col, False, trajectory_points)
 
-                            for i in trajectory_points:
+                            for i in trajectory_points[:-1]:
                                 pygame.draw.circle(window, rarity_col, i, 1)
 
                 coloured = plane_icon_white.copy()
@@ -1790,19 +1832,6 @@ def main():
                 rarity_counts[4] += 1
             else:
                 rarity_counts[1] += 1
-
-        _rarity_tiers = [
-            (10, (255, 0, 255)),
-            (8,  (255, 0, 0)),
-            (6,  (0, 255, 0)),
-            (4,  (255, 255, 0)),
-            (1,  (255, 255, 255)),
-        ]
-        _col_x = active_graph_rect.left - 28
-        _tier_h = active_graph_rect.height // len(_rarity_tiers)
-        for _i, (_tier, _col) in enumerate(_rarity_tiers):
-            _ly = active_graph_rect.top + _i * _tier_h + (_tier_h - 11) // 2
-            draw_text.normal(window, str(rarity_counts[_tier]), text_font3, _col, _col_x, _ly)
 
         draw_line_graph(window, active_graph_rect, list(active_count_history), active_y_max, draw_text, text_font3, pygame, active_peak, current_time, TOP_GRAPH_HISTORY_SECONDS, "ACTIVE")
         total_peak = max((sample[1] for sample in total_seen_history), default=0)
@@ -1954,6 +1983,10 @@ def main():
             window, heatmap_button_rect, hide_planes_button_rect,
             reset_filters_button_rect, radar_heatmap_enabled,
             hide_planes_mode, filter_button_icons, pygame
+        )
+        draw_rarity_filter(
+            window, rarity_checkbox_rects, rarity_counts, rarity_filter_selected,
+            RARITY_TIERS, draw_text, text_font3, pygame
         )
 
         #INFO BOX — polar plot + system stats
