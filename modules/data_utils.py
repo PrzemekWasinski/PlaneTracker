@@ -557,7 +557,7 @@ FLIGHT_HISTORY_FIELDS = [
 FLIGHT_HISTORY_DIR = './flight_history'
 
 
-def save_flight_history(planes_dict, history_dir=FLIGHT_HISTORY_DIR):
+def save_flight_history(planes_dict, history_dir=FLIGHT_HISTORY_DIR, on_error=None):
     if not planes_dict:
         return
 
@@ -568,6 +568,7 @@ def save_flight_history(planes_dict, history_dir=FLIGHT_HISTORY_DIR):
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     try:
+        csv.field_size_limit(10 * 1024 * 1024)
         os.makedirs(history_dir, exist_ok=True)
         with open(lock_path, 'w') as lock_file:
             import fcntl
@@ -582,15 +583,6 @@ def save_flight_history(planes_dict, history_dir=FLIGHT_HISTORY_DIR):
                                 existing[row['icao']] = row
 
                 for icao, plane in planes_dict.items():
-                    if (plane.get('flight', '-') == '-' or
-                            plane.get('manufacturer', '-') == '-' or
-                            plane.get('model', '-') == '-' or
-                            plane.get('owner', '-') == '-' or
-                            plane.get('registration', '-') == '-' or
-                            plane.get('altitude', '-') == '-' or
-                            plane.get('speed', '-') == '-' or
-                            plane.get('track', '-') == '-'):
-                        continue
 
                     merged_history = {}
                     if icao in existing:
@@ -660,7 +652,10 @@ def save_flight_history(planes_dict, history_dir=FLIGHT_HISTORY_DIR):
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
     except Exception as e:
-        print(f"Flight history save error: {e}")
+        msg = f"Flight history save error: {e}"
+        print(msg)
+        if on_error:
+            on_error(msg)
         if os.path.exists(temp_path):
             try:
                 os.remove(temp_path)

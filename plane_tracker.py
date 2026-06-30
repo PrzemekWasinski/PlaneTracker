@@ -962,7 +962,7 @@ def adsb_processing_thread():
                 planes_snapshot = {icao: dict(plane) for icao, plane in active_planes.items()}
             for _plane in planes_snapshot.values():
                 _plane['rating'] = get_rarity_rating(_plane.get('model', '-'), model_ratings)
-            save_flight_history(planes_snapshot, history_dir=FLIGHT_HISTORY_DIR)
+            save_flight_history(planes_snapshot, history_dir=FLIGHT_HISTORY_DIR, on_error=add_message)
             last_flight_history_save = current_time
 
         if current_time - last_stats_upload > 60 and not offline and network_available:
@@ -994,6 +994,7 @@ def adsb_processing_thread():
                         'top_aircraft': {'name': top_aircraft, 'count': top_model_count},
                         'furthest_aircraft_km': round(furthest, 2) if furthest is not None else None,
                         'furthest_plane': furthest_plane,
+                        'last_updated': datetime.now().strftime('%H-%M-%S'),
                     })
                     add_message(f"Firebase updated: {total} aircraft")
 
