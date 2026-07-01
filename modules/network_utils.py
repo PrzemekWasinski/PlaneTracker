@@ -30,11 +30,12 @@ def connect(server):
             time.sleep(3)
 
 
-def check_network(url='https://hexdb.io', timeout=2):
+def check_network(host='8.8.8.8', port=53, timeout=3):
     try:
-        requests.get(url, timeout=timeout)
+        sock = socket.create_connection((host, port), timeout=timeout)
+        sock.close()
         return True
-    except Exception:
+    except OSError:
         return False
 
 

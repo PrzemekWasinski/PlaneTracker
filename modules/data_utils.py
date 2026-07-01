@@ -142,6 +142,7 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
         'total': 0,
         'top_model': {'name': None, 'count': 0},
         'top_manufacturer': {'name': None, 'count': 0},
+        'top_aircraft': {'name': None, 'count': 0},
         'top_airline': {'name': None, 'count': 0},
         'manufacturer_breakdown': {},
         'furthest_detected': None,
@@ -199,6 +200,16 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
         top_model_name, top_model_count = _top(df['model']) if 'model' in df.columns else (None, 0)
         top_mfr_name, top_mfr_count = _top(df['manufacturer']) if 'manufacturer' in df.columns else (None, 0)
         top_airline_name, top_airline_count = _top(df['owner']) if 'owner' in df.columns else (None, 0)
+
+        # Find the manufacturer for the top model from a matching row, so the
+        # top aircraft is a real manufacturer/model pairing rather than two
+        # independently-computed tops
+        top_aircraft_name, top_aircraft_count = (None, 0)
+        if top_model_name is not None and 'manufacturer' in df.columns:
+            matching_rows = df.loc[df['model'] == top_model_name, 'manufacturer'].dropna()
+            if not matching_rows.empty:
+                top_aircraft_name = f"{matching_rows.iloc[0]} {top_model_name}"
+                top_aircraft_count = top_model_count
 
         mfr_breakdown = {}
         if 'manufacturer' in df.columns:
@@ -267,6 +278,7 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
             'total': total,
             'top_model': {'name': top_model_name, 'count': top_model_count},
             'top_manufacturer': {'name': top_mfr_name, 'count': top_mfr_count},
+            'top_aircraft': {'name': top_aircraft_name, 'count': top_aircraft_count},
             'top_airline': {'name': top_airline_name, 'count': top_airline_count},
             'manufacturer_breakdown': mfr_breakdown,
             'furthest_detected': furthest,

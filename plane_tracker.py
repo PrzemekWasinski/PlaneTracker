@@ -17,7 +17,9 @@ import threading
 import math
 import fcntl
 import sys
+import subprocess
 from collections import deque
+from concurrent.futures import ProcessPoolExecutor
 
 _log_dir = Path("logs")
 _log_dir.mkdir(exist_ok=True)
@@ -247,6 +249,11 @@ tracker_photo_meta = {}
 tracker_plane_photo_cache = {}
 tracker_plane_photo_meta_cache = {}
 tracking_mode_auto = False
+planecam_auto_capture_last_time = {}
+PLANECAM_AUTO_CAPTURE_INTERVAL = 15.0
+tracker_plane_photo_history = {}
+TRACKER_PLANE_PHOTO_HISTORY_LIMIT = 10
+camera_scroll_offset = 0
 auto_track_queue = deque()
 auto_track_inside_icaos = set()
 AUTO_TRACK_POLYGON_KEYS = (("tlLat", "tlLon"), ("trLat", "trLon"), ("brLat", "brLon"), ("blLat", "blLon"))
@@ -312,20 +319,6 @@ def acquire_instance_lock():
         sys.exit(1)
 
 acquire_instance_lock()
-
-#Animation variables for smooth panning
-is_animating = False
-animation_duration = 0.5  
-animation_start_time = 0
-animation_start_lat = 0
-animation_start_lon = 0
-animation_target_lat = 0
-animation_target_lon = 0
-
-#Track last scroll wheel use to prevent accidental clicks
-last_scroll_time = 0
-scroll_click_delay = 0.2 
-
 
 def add_message(message):
     body = " ".join(str(message).split())
@@ -465,8 +458,11 @@ def api_worker_thread(icao, plane_data):
         api_pending.discard(icao)
 
 
+_tracker_stats_link_ok = False
+
+
 def fetch_tracker_stats(log_result=False):
-    global tracker_status_connected, tracker_device_stats
+    global tracker_device_stats, _tracker_stats_link_ok
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(3)
@@ -486,13 +482,13 @@ def fetch_tracker_stats(log_result=False):
         with data_lock:
             tracker_device_stats = parsed_stats
 
-        was_connected = tracker_status_connected
-        tracker_status_connected = True
+        was_connected = _tracker_stats_link_ok
+        _tracker_stats_link_ok = True
         if log_result and not was_connected:
             add_message('Connected to camera module')
     except Exception as error:
-        was_connected = tracker_status_connected
-        tracker_status_connected = False
+        was_connected = _tracker_stats_link_ok
+        _tracker_stats_link_ok = False
         with data_lock:
             tracker_device_stats = {'temp': None, 'ram': None, 'cpu': None, 'disk': None}
         if log_result or was_connected:
@@ -505,6 +501,34 @@ def tracker_stats_thread():
         fetch_tracker_stats(log_result=first_check)
         first_check = False
         time.sleep(5)
+
+
+#Ping-based reachability check for the camera module, independent of the stats/capture
+#TCP connections so a busy capture socket doesn't make the status flap to "offline"
+TRACKER_PING_INTERVAL = 10.0
+
+
+def ping_tracker_host(host, timeout=2):
+    try:
+        if sys.platform.startswith('win'):
+            cmd = ['ping', '-n', '1', '-w', str(int(timeout * 1000)), host]
+        else:
+            cmd = ['ping', '-c', '1', '-W', str(int(timeout)), host]
+        result = subprocess.run(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout + 1
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def tracker_ping_thread():
+    global tracker_status_connected
+    while tracker_running:
+        reachable = ping_tracker_host(CAMERA_SERVER[0])
+        with data_lock:
+            tracker_status_connected = reachable
+        time.sleep(TRACKER_PING_INTERVAL)
 
 
 def receive_tracker_line(sock):
@@ -532,6 +556,7 @@ def receive_tracker_bytes(sock, byte_count):
 def refresh_tracker_photo_surface():
     global tracker_photo_surface, tracker_photo_dirty, tracker_photo_status
     global tracker_photo_bytes, tracker_pending_photo_plane_icao, tracker_plane_photo_meta_cache
+    global tracker_plane_photo_history
 
     pending_bytes = None
     pending_plane_icao = None
@@ -560,6 +585,15 @@ def refresh_tracker_photo_surface():
             tracker_plane_photo_cache[pending_plane_icao] = loaded_surface
             tracker_plane_photo_meta_cache[pending_plane_icao] = dict(tracker_photo_meta)
             prune_tracker_photo_cache_locked(preserve_icao=pending_plane_icao)
+            _pending_meta_snapshot = dict(tracker_photo_meta)
+
+    if pending_plane_icao:
+        if pending_plane_icao not in tracker_plane_photo_history:
+            tracker_plane_photo_history[pending_plane_icao] = []
+        _history = tracker_plane_photo_history[pending_plane_icao]
+        _history.insert(0, (loaded_surface, _pending_meta_snapshot))
+        if len(_history) > TRACKER_PLANE_PHOTO_HISTORY_LIMIT:
+            _history.pop()
 
 
 def predict_tracker_target(plane_data):
@@ -607,7 +641,7 @@ def predict_tracker_target(plane_data):
 
 
 def send_to_tracker(lat, lon, alt_ft, target_icao=None, add_message_callback=None):
-    global tracker_status_connected, tracker_capture_in_progress
+    global tracker_capture_in_progress
     global tracker_photo_bytes, tracker_photo_dirty, tracker_photo_status, tracker_photo_plane_icao, tracker_pending_photo_plane_icao, tracker_photo_meta, tracker_plane_photo_meta_cache
 
     logger = add_message_callback or add_message
@@ -627,7 +661,6 @@ def send_to_tracker(lat, lon, alt_ft, target_icao=None, add_message_callback=Non
         if not header:
             raise ConnectionError('camera module sent no response')
 
-        tracker_status_connected = True
         if header.startswith('IMAGE '):
             header_parts = header.split()
             image_size = int(header_parts[1])
@@ -698,7 +731,6 @@ def send_to_tracker(lat, lon, alt_ft, target_icao=None, add_message_callback=Non
                 tracker_photo_status = f"Unexpected response: {header}"
             logger(f"Camera module response: {header}")
     except Exception as error:
-        tracker_status_connected = False
         with data_lock:
             tracker_photo_status = 'Camera unavailable'
         logger(format_service_connection_error('Camera module', CAMERA_SERVER, error))
@@ -746,7 +778,10 @@ def begin_camera_tracking(target_icao, logger=None, auto_select=False):
             tracker_photo_plane_icao = target_icao
 
         if auto_select:
-            selected_plane_icao = target_icao
+            with data_lock:
+                _has_manual_selection = selected_plane_icao is not None and selected_plane_icao in displayed_planes
+            if not _has_manual_selection:
+                selected_plane_icao = target_icao
 
         threading.Thread(target=send_to_tracker, args=(lat, lon, float(alt_ft), target_icao, logger), daemon=True).start()
         logger(f"Aiming camera at {target_icao} using {lead_seconds:.1f}s lead")
@@ -794,6 +829,11 @@ def adsb_processing_thread():
     last_network_check = time.time()
     last_flight_history_save = time.time()
     readsb_connected = False
+
+    #Heavy CSV/pandas work runs in a subprocess so it can't stall the render loop via the GIL
+    bg_pool = ProcessPoolExecutor(max_workers=1)
+    flight_history_future = None
+    stats_future = None
 
     while tracker_running:
         current_time = time.time()
@@ -956,34 +996,39 @@ def adsb_processing_thread():
                 del active_planes[icao]
                 tracker_plane_photo_cache.pop(icao, None)
                 tracker_plane_photo_meta_cache.pop(icao, None)
+                planecam_auto_capture_last_time.pop(icao, None)
 
-        if current_time - last_flight_history_save >= 60:
+        if flight_history_future is not None and flight_history_future.done():
+            _fh_error = flight_history_future.exception()
+            if _fh_error is not None:
+                add_message(f"Flight history save error: {str(_fh_error)[:60]}")
+            flight_history_future = None
+
+        if current_time - last_flight_history_save >= 60 and flight_history_future is None:
             with data_lock:
                 planes_snapshot = {icao: dict(plane) for icao, plane in active_planes.items()}
             for _plane in planes_snapshot.values():
                 _plane['rating'] = get_rarity_rating(_plane.get('model', '-'), model_ratings)
-            save_flight_history(planes_snapshot, history_dir=FLIGHT_HISTORY_DIR, on_error=add_message)
+            flight_history_future = bg_pool.submit(save_flight_history, planes_snapshot, FLIGHT_HISTORY_DIR)
             last_flight_history_save = current_time
 
-        if current_time - last_stats_upload > 60 and not offline and network_available:
+        if stats_future is not None and stats_future.done():
             try:
-                cpu_temp = _read_cpu_temp()
-                ram_percentage = psutil.virtual_memory()[2]
+                new_stats = stats_future.result()
+            except Exception as e:
+                new_stats = None
+                log.error(f"Stats upload error: {e}")
+                add_message(f"Stats upload error: {str(e)[:30]}")
+            stats_future = None
 
-                new_stats = functions.get_stats(
-                    _config['myLat'], _config['myLon'],
-                    flight_history_dir=FLIGHT_HISTORY_DIR,
-                )
+            try:
                 total = new_stats.get('total', 0) if new_stats else 0
-
                 if total > 0:
                     today = datetime.today().strftime("%Y-%m-%d")
-                    top_airline_name = (new_stats['top_airline']['name'] or '') if new_stats else ''
-                    top_airline_count = (new_stats['top_airline']['count'] or 0) if new_stats else 0
-                    top_mfr = (new_stats['top_manufacturer']['name'] or '') if new_stats else ''
-                    top_model = (new_stats['top_model']['name'] or '') if new_stats else ''
-                    top_model_count = (new_stats['top_model']['count'] or 0) if new_stats else 0
-                    top_aircraft = f"{top_mfr} {top_model}".strip()
+                    top_airline_name = new_stats['top_airline']['name'] or ''
+                    top_airline_count = new_stats['top_airline']['count'] or 0
+                    top_aircraft = new_stats['top_aircraft']['name'] or ''
+                    top_aircraft_count = new_stats['top_aircraft']['count'] or 0
                     furthest = new_stats.get('furthest_detected')
                     furthest_plane = new_stats.get('furthest_plane')
 
@@ -991,17 +1036,19 @@ def adsb_processing_thread():
                     day_ref.set({
                         'total_aircraft': total,
                         'top_airline': {'name': top_airline_name, 'count': top_airline_count},
-                        'top_aircraft': {'name': top_aircraft, 'count': top_model_count},
+                        'top_aircraft': {'name': top_aircraft, 'count': top_aircraft_count},
                         'furthest_aircraft_km': round(furthest, 2) if furthest is not None else None,
                         'furthest_plane': furthest_plane,
                         'last_updated': datetime.now().strftime('%H-%M-%S'),
                     })
                     add_message(f"Firebase updated: {total} aircraft")
-
-                last_stats_upload = current_time
             except Exception as e:
                 log.error(f"Stats upload error: {e}")
                 add_message(f"Stats upload error: {str(e)[:30]}")
+
+        if current_time - last_stats_upload > 60 and not offline and network_available and stats_future is None:
+            stats_future = bg_pool.submit(functions.get_stats, _config['myLat'], _config['myLon'], FLIGHT_HISTORY_DIR)
+            last_stats_upload = current_time
 
         is_receiving = False
         time.sleep(1)
@@ -1046,6 +1093,7 @@ _flight_stats_cache = {
     'total': 0,
     'top_model': {'name': None, 'count': 0},
     'top_manufacturer': {'name': None, 'count': 0},
+    'top_aircraft': {'name': None, 'count': 0},
     'top_airline': {'name': None, 'count': 0},
     'manufacturer_breakdown': {},
     'furthest_detected': None,
@@ -1093,19 +1141,21 @@ processing_thread.start()
 tracker_stats_worker = threading.Thread(target=tracker_stats_thread, daemon=True)
 tracker_stats_worker.start()
 
+tracker_ping_worker = threading.Thread(target=tracker_ping_thread, daemon=True)
+tracker_ping_worker.start()
+
 flight_stats_worker = threading.Thread(target=flight_stats_refresh_thread, daemon=True)
 flight_stats_worker.start()
 
 #THREAD 1: Main UI Thread
 def main():
     global tracker_running, offline, selected_plane_icao, heatmap_hits
-    global is_animating, animation_start_time, animation_start_lat, animation_start_lon
-    global animation_target_lat, animation_target_lon, last_scroll_time
     global altitude_filter_threshold, altitude_filter_above, altitude_filter_dragging
     global distance_filter_threshold_km, distance_filter_outside, distance_filter_dragging
     global radar_heatmap_enabled, hide_planes_mode, distance_unit, rarity_filter_selected
     global tracker_capture_in_progress, tracker_photo_status, tracker_photo_plane_icao, tracking_mode_auto
-    
+    global camera_scroll_offset, planecam_auto_capture_last_time
+
     start_time = time.time()
     top_graph_last_bucket = load_top_graph_history(active_count_history, total_seen_history, TOP_GRAPH_HISTORY_DIR, TOP_GRAPH_HISTORY_SECONDS, start_time)
     heatmap_hits = deque(load_today_heatmap_hits(FLIGHT_HISTORY_DIR, start_time))
@@ -1127,6 +1177,8 @@ def main():
     log_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
     log_scroll_drag_start_y = 0
     log_scroll_drag_start_offset = 0
+    _prev_target_icao_for_scroll = None
+    closest_plane = None
 
     while True:
         current_time = time.time()
@@ -1180,7 +1232,12 @@ def main():
             tier: pygame.Rect(_rarity_col_x, _rarity_start_y + i * _rarity_row_h, 14, 14)
             for i, (tier, _col, _label) in enumerate(RARITY_TIERS)
         }
-        
+
+        _cam_box_w = int((SIDEBAR_WIDTH / 2) - 10)
+        _cam_box_h = int(_cam_box_w * 3 / 4)
+        cam_scroll_right_rect = pygame.Rect(SIDEBAR_X + 5 + _cam_box_w - btn_w, log_bottom_row_y + _cam_box_h + 10, btn_w, btn_h)
+        cam_scroll_left_rect = pygame.Rect(cam_scroll_right_rect.left - btn_w - btn_gap, log_bottom_row_y + _cam_box_h + 10, btn_w, btn_h)
+
         #Log health stats every 30 minutes
         if current_time - last_health_log >= 1800:
             log.info(f"Health check: CPU temp={cpu_temp:.1f}C, RAM={ram_percentage:.1f}%")
@@ -1219,9 +1276,6 @@ def main():
 
                 #Only zoom if mouse is over the radar area
                 elif RADAR_RECT.collidepoint(mouse_x, mouse_y):
-                    last_scroll_time = current_time  #Track scroll time to prevent accidental clicks
-                    old_range = range_km
-                    
                     #Scroll up = zoom in, scroll down = zoom out
                     if event.y > 0:  #Scroll up
                         if range_km > 25:
@@ -1229,22 +1283,7 @@ def main():
                     elif event.y < 0:  #Scroll down
                         if range_km < 1000:
                             range_km += 25
-                    
-                    #If zoom level changed, keep home-centered behavior when no plane is selected
-                    if old_range != range_km and not (selected_plane_icao and selected_plane_icao in displayed_planes_snapshot):
-                        target_lat = _config['myLat']
-                        target_lon = _config['myLon']
 
-                        #Only animate if we're not already there
-                        if abs(view_center_lat - target_lat) > 0.0001 or abs(view_center_lon - target_lon) > 0.0001:
-                            is_animating = True
-                            animation_start_time = current_time
-                            animation_start_lat = view_center_lat
-                            animation_start_lon = view_center_lon
-                            animation_target_lat = target_lat
-                            animation_target_lon = target_lon
-
-                
             elif event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 1:
                     altitude_filter_dragging = False
@@ -1274,11 +1313,7 @@ def main():
                 #Only process left mouse button (button 1), ignore middle/right clicks and scroll buttons
                 if event.button != 1:
                     continue
-                
-                #Ignore clicks shortly after scrolling to prevent accidental plane selection
-                if current_time - last_scroll_time < scroll_click_delay:
-                    continue
-                    
+
                 last_tap_time = time.time()
                 mouse_x, mouse_y = pygame.mouse.get_pos()
 
@@ -1376,6 +1411,20 @@ def main():
                     distance_filter_threshold_km = clamp_distance_threshold((1.0 - ((clamped_y - distance_slider_track_rect.top) / max(1, distance_slider_track_rect.height))) * 1000.0)
                     continue
 
+                if cam_scroll_left_rect.collidepoint(mouse_x, mouse_y):
+                    _scroll_icao = selected_plane_icao if selected_plane_icao else closest_plane
+                    _hist_len = len(tracker_plane_photo_history.get(_scroll_icao, [])) if _scroll_icao else 0
+                    if _hist_len > 0:
+                        camera_scroll_offset = (camera_scroll_offset - 1) % _hist_len
+                    continue
+
+                if cam_scroll_right_rect.collidepoint(mouse_x, mouse_y):
+                    _scroll_icao = selected_plane_icao if selected_plane_icao else closest_plane
+                    _hist_len = len(tracker_plane_photo_history.get(_scroll_icao, [])) if _scroll_icao else 0
+                    if _hist_len > 0:
+                        camera_scroll_offset = (camera_scroll_offset + 1) % _hist_len
+                    continue
+
                 if track_plane_button_rect.collidepoint(mouse_x, mouse_y):
                     if tracking_mode_auto:
                         add_message('Manual tracking disabled in auto mode')
@@ -1416,32 +1465,10 @@ def main():
                 elif zoom_in_ctrl_rect.collidepoint(mouse_x, mouse_y):
                     if range_km > 25:
                         range_km -= 25
-                        if not (selected_plane_icao and selected_plane_icao in displayed_planes_snapshot):
-                            target_lat = _config['myLat']
-                            target_lon = _config['myLon']
-
-                            if abs(view_center_lat - target_lat) > 0.0001 or abs(view_center_lon - target_lon) > 0.0001:
-                                is_animating = True
-                                animation_start_time = current_time
-                                animation_start_lat = view_center_lat
-                                animation_start_lon = view_center_lon
-                                animation_target_lat = target_lat
-                                animation_target_lon = target_lon
 
                 elif zoom_out_ctrl_rect.collidepoint(mouse_x, mouse_y): #Zoom out
                     if range_km < 1000:
                         range_km += 25
-                        if not (selected_plane_icao and selected_plane_icao in displayed_planes_snapshot):
-                            target_lat = _config['myLat']
-                            target_lon = _config['myLon']
-
-                            if abs(view_center_lat - target_lat) > 0.0001 or abs(view_center_lon - target_lon) > 0.0001:
-                                is_animating = True
-                                animation_start_time = current_time
-                                animation_start_lat = view_center_lat
-                                animation_start_lon = view_center_lon
-                                animation_target_lat = target_lat
-                                animation_target_lon = target_lon
 
                 elif mode_toggle_rect.collidepoint(mouse_x, mouse_y):
                     offline = not offline
@@ -1491,24 +1518,6 @@ def main():
         
         displayed_planes_snapshot = snapshot_displayed_planes()
 
-        #Handle smooth panning animation
-        if is_animating:
-            elapsed = current_time - animation_start_time
-            progress = min(elapsed / animation_duration, 1.0)
-            
-            #Apply easing for smooth deceleration
-            eased_progress = 1 - pow(1 - progress, 3)
-            
-            #Interpolate between start and target positions
-            view_center_lat = animation_start_lat + (animation_target_lat - animation_start_lat) * eased_progress
-            view_center_lon = animation_start_lon + (animation_target_lon - animation_start_lon) * eased_progress
-            
-            #Stop animation when complete
-            if progress >= 1.0:
-                is_animating = False
-                view_center_lat = animation_target_lat
-                view_center_lon = animation_target_lon
-        
         refresh_tracker_photo_surface()
 
         #Clear screen
@@ -1794,10 +1803,33 @@ def main():
                 while auto_track_queue:
                     queued_icao = auto_track_queue.popleft()
                     if begin_camera_tracking(queued_icao, logger=add_message, auto_select=True):
+                        planecam_auto_capture_last_time[queued_icao] = current_time
                         break
         else:
             auto_track_queue.clear()
             auto_track_inside_icaos.clear()
+
+        # Periodic auto-capture (auto-track mode only): every plane currently inside the
+        # auto-track zone gets its own independent 15s cooldown, not a shared global one -
+        # one plane's cooldown doesn't block capturing a different plane in the meantime.
+        if tracking_mode_auto and current_auto_track_icaos:
+            with data_lock:
+                _ac_busy = tracker_capture_in_progress
+            if not _ac_busy:
+                _ac_candidates = [
+                    icao for icao in current_auto_track_icaos
+                    if current_time - planecam_auto_capture_last_time.get(icao, 0.0) >= PLANECAM_AUTO_CAPTURE_INTERVAL
+                ]
+                if _ac_candidates:
+                    _ac_target = min(_ac_candidates, key=lambda icao: planecam_auto_capture_last_time.get(icao, 0.0))
+                    if begin_camera_tracking(_ac_target, logger=add_message, auto_select=True):
+                        planecam_auto_capture_last_time[_ac_target] = current_time
+
+        # Reset scroll offset when the target plane changes
+        _scroll_target_icao = selected_plane_icao if selected_plane_icao else closest_plane
+        if _scroll_target_icao != _prev_target_icao_for_scroll:
+            camera_scroll_offset = 0
+            _prev_target_icao_for_scroll = _scroll_target_icao
 
         #Reset clip for UI elements outside radar
         window.set_clip(None)
@@ -1889,7 +1921,7 @@ def main():
         avg_mach_text = f"{stats['avg_mach']:.3f}" if stats.get('avg_mach') is not None else '-'
         top_airline_name = (stats['top_airline']['name'] or '-')[:16]
         top_mfr_name = (stats['top_manufacturer']['name'] or '-')[:14]
-        top_model_name = (stats['top_model']['name'] or '-')[:14]
+        top_aircraft_name = (stats['top_aircraft']['name'] or '-')[:16]
 
         _sp = 17
         col_r = col1 + 155
@@ -1899,7 +1931,7 @@ def main():
         draw_text.normal(window, f"Active: {displayed_count}", text_font3, (0, 255, 0), col1, sys_y + _sp * 3)
         draw_text.normal(window, f"Top Manufacturer: {top_mfr_name}", text_font3, (255, 255, 255), col1, sys_y + _sp * 4 + 15)
         draw_text.normal(window, f"Top Airline: {top_airline_name}", text_font3, (255, 255, 255), col1, sys_y + _sp * 5 + 15)
-        draw_text.normal(window, f"Top Aircraft: {top_mfr_name} {top_model_name}", text_font3, (255, 255, 255), col1, sys_y + _sp * 6 + 15)
+        draw_text.normal(window, f"Top Aircraft: {top_aircraft_name}", text_font3, (255, 255, 255), col1, sys_y + _sp * 6 + 15)
 
         draw_text.normal(window, f"Max Spd: {max_spd_text}", text_font3, (255, 255, 255), col_r, sys_y)
         draw_text.normal(window, f"Avg Mach: {avg_mach_text}", text_font3, (255, 255, 255), col_r, sys_y + _sp)
@@ -2115,20 +2147,17 @@ def main():
         with data_lock:
             camera_busy = tracker_capture_in_progress
             camera_connected = tracker_status_connected
-            target_cam_surface = tracker_plane_photo_cache.get(target_icao) if target_icao else None
-            selected_cam_surface = tracker_plane_photo_cache.get(selected_plane_icao) if selected_plane_icao else None
-            latest_cam_surface = tracker_photo_surface
-            _meta_icao = target_icao or selected_plane_icao
-            cam_meta = dict(tracker_plane_photo_meta_cache.get(_meta_icao, tracker_photo_meta))
+            _latest_cam_surface = tracker_photo_surface
+            _latest_cam_meta = dict(tracker_photo_meta)
 
-        if target_cam_surface is not None:
-            camera_photo_surface = target_cam_surface
-        elif selected_cam_surface is not None:
-            camera_photo_surface = selected_cam_surface
-        elif target_icao or selected_plane_icao:
-            camera_photo_surface = None
+        _scroll_display_icao = selected_plane_icao if selected_plane_icao else closest_plane
+        _photo_history = tracker_plane_photo_history.get(_scroll_display_icao, []) if _scroll_display_icao else []
+        if _photo_history:
+            _display_idx = min(camera_scroll_offset, len(_photo_history) - 1)
+            camera_photo_surface, cam_meta = _photo_history[_display_idx]
         else:
-            camera_photo_surface = latest_cam_surface
+            camera_photo_surface = None if _scroll_display_icao else _latest_cam_surface
+            cam_meta = _latest_cam_meta
 
         if camera_photo_surface is not None:
             img_w, img_h = camera_photo_surface.get_size()
@@ -2140,6 +2169,21 @@ def main():
         else:
             placeholder = 'CAMERA BUSY' if camera_busy else 'NO IMAGE'
             draw_text.center(window, placeholder, text_font1, (100, 100, 100), cam_rect.centerx, cam_rect.centery)
+
+        # Scroll buttons below camera image
+        for _scroll_rect, _arrow_dir in [(cam_scroll_left_rect, 'L'), (cam_scroll_right_rect, 'R')]:
+            pygame.draw.rect(window, (255, 255, 255), _scroll_rect, 0)
+            pygame.draw.rect(window, (100, 100, 100), _scroll_rect, 1)
+            _cx, _cy = _scroll_rect.centerx, _scroll_rect.centery
+            if _arrow_dir == 'L':
+                pygame.draw.polygon(window, (0, 0, 0), [(_cx + 8, _cy - 8), (_cx - 8, _cy), (_cx + 8, _cy + 8)])
+            else:
+                pygame.draw.polygon(window, (0, 0, 0), [(_cx - 8, _cy - 8), (_cx + 8, _cy), (_cx - 8, _cy + 8)])
+
+        if _photo_history:
+            _total_photos = len(_photo_history)
+            _shown_idx = min(camera_scroll_offset, _total_photos - 1)
+            draw_text.right(window, f"{_shown_idx + 1}/{_total_photos}", stat_font, (200, 200, 200), cam_scroll_right_rect.right, cam_scroll_right_rect.bottom + 5)
 
         cam_status = 'BUSY' if camera_busy else ('CONNECTED' if camera_connected else 'OFFLINE')
         cam_pan = cam_meta.get('pan', '-')
