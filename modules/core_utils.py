@@ -1,4 +1,5 @@
 import math
+import multiprocessing
 import os
 import re
 import shutil
@@ -36,8 +37,11 @@ def save_config(config):
 
 def restart_script():
     print("Restarting script")
-    time.sleep(2)
-    os.execv(sys.executable, ["python3"] + sys.argv)
+    for child in multiprocessing.active_children():
+        child.terminate()
+        child.join(timeout=2)
+    time.sleep(0.25)
+    os.execv(sys.executable, [sys.executable, *sys.argv])
 
 
 def coords_to_xy(lat, lon, range_km, centre_lat, centre_lon, screen_width, screen_height, center_x=None, center_y=None):

@@ -3,7 +3,7 @@ import csv
 import os
 import time
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from time import localtime, strftime
 
 from .core_utils import calculate_distance, clean_string
@@ -131,12 +131,14 @@ _STATS_NUMERIC_COLS = [
 ]
 
 
-def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history'):
+def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history', now=None):
     import pandas as pd
     import glob as _glob
 
-    today = datetime.today().strftime('%Y-%m-%d')
-    csv_path_today = os.path.join(flight_history_dir, f'{today}.csv')
+    now = now or datetime.now()
+    cutoff = now - timedelta(hours=24)
+    today = now.strftime('%Y-%m-%d')
+    yesterday = (now - timedelta(days=1)).strftime('%Y-%m-%d')
 
     default_stats = {
         'total': 0,
@@ -159,16 +161,22 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
         'last_updated': strftime('%H:%M:%S', localtime()),
     }
 
-    if os.path.exists(csv_path_today):
-        csv_path = csv_path_today
-    else:
+    rolling_paths = [
+        os.path.join(flight_history_dir, f'{day}.csv')
+        for day in (yesterday, today)
+        if os.path.exists(os.path.join(flight_history_dir, f'{day}.csv'))
+    ]
+    filter_to_rolling_window = bool(rolling_paths)
+    if not rolling_paths:
+        # Preserve the existing fallback for archived/development datasets.
         all_files = sorted(_glob.glob(os.path.join(flight_history_dir, '????-??-??.csv')))
         if not all_files:
             return default_stats
-        csv_path = all_files[-1]
+        rolling_paths = [all_files[-1]]
 
     try:
-        df = pd.read_csv(csv_path, low_memory=False)
+        frames = [pd.read_csv(csv_path, low_memory=False) for csv_path in rolling_paths]
+        df = pd.concat(frames, ignore_index=True)
 
         # Coerce numeric columns exactly as stats.py does
         for col in _STATS_NUMERIC_COLS:
@@ -179,6 +187,13 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
         for col in ("first_seen", "last_seen"):
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce")
+        if filter_to_rolling_window:
+            recent = pd.Series(False, index=df.index)
+            if "last_seen" in df.columns:
+                recent |= df["last_seen"] >= cutoff
+            if "first_seen" in df.columns:
+                recent |= df["first_seen"] >= cutoff
+            df = df.loc[recent]
 
         # Clean string columns exactly as stats.py does
         for col in ("owner", "manufacturer", "model", "category", "emergency", "registration"):
