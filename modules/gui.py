@@ -69,6 +69,8 @@ heatmap_off_icon = pygame.image.load(os.path.join("textures", "icons", "heatmap_
 plane_only_mode_icon = pygame.image.load(os.path.join("textures", "icons", "plane.png")).convert_alpha()
 plane_and_text_mode_icon = pygame.image.load(os.path.join("textures", "icons", "plane_and_text.png")).convert_alpha()
 hide_plane_mode_icon = pygame.image.load(os.path.join("textures", "icons", "hide_plane.png")).convert_alpha()
+hide_trajectories_icon = pygame.image.load(os.path.join("textures", "icons", "hide_trajectories.png")).convert_alpha()
+show_trajectories_icon = pygame.image.load(os.path.join("textures", "icons", "show_trajectories.png")).convert_alpha()
 clear_filters_icon = pygame.image.load(os.path.join("textures", "icons", "clear_filters.png")).convert_alpha()
 plane_icon = pygame.image.load(os.path.join("textures", "icons", "plane_icon.png")).convert_alpha()
 selected_plane_icon = pygame.image.load(os.path.join("textures", "icons", "selected_plane.png")).convert_alpha()
@@ -98,19 +100,28 @@ SIDEBAR_X = 1090
 SIDEBAR_WIDTH = width - SIDEBAR_X
 
 
-# UI Buttons - Start at SIDEBAR_X + 10, 10px spacing between buttons
+# UI Buttons - spread across exactly the same width as the camera preview box.
 btn_w = 40
 btn_h = 40
-btn_gap = 10
+btn_gap = 12  # Match the toolbar's nominal 12px spacing.
 toolbar_start_x = SIDEBAR_X + 5
+toolbar_width = int((SIDEBAR_WIDTH / 2) - 10)
+toolbar_button_count = 8
 
-zoom_in_ctrl_rect = pygame.Rect(toolbar_start_x, height - 50, btn_w, btn_h)
-zoom_out_ctrl_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 1, height - 50, btn_w, btn_h)
-mode_toggle_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 2, height - 50, btn_w, btn_h)
-auto_track_mode_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 3, height - 50, btn_w, btn_h)
-restart_button_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 4, height - 50, btn_w, btn_h)
-off_button_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 5, height - 50, btn_w, btn_h)
-clear_graph_rect = pygame.Rect(toolbar_start_x + (btn_w + btn_gap) * 6, height - 50, btn_w, btn_h)
+
+def toolbar_button_x(index):
+    usable_width = toolbar_width - btn_w
+    return toolbar_start_x + round(index * usable_width / (toolbar_button_count - 1))
+
+
+zoom_in_ctrl_rect = pygame.Rect(toolbar_button_x(0), height - 50, btn_w, btn_h)
+zoom_out_ctrl_rect = pygame.Rect(toolbar_button_x(1), height - 50, btn_w, btn_h)
+mode_toggle_rect = pygame.Rect(toolbar_button_x(2), height - 50, btn_w, btn_h)
+auto_track_mode_rect = pygame.Rect(toolbar_button_x(3), height - 50, btn_w, btn_h)
+restart_button_rect = pygame.Rect(toolbar_button_x(4), height - 50, btn_w, btn_h)
+off_button_rect = pygame.Rect(toolbar_button_x(5), height - 50, btn_w, btn_h)
+clear_graph_rect = pygame.Rect(toolbar_button_x(6), height - 50, btn_w, btn_h)
+trajectory_toggle_rect = pygame.Rect(toolbar_button_x(7), height - 50, btn_w, btn_h)
 
 #Global for plane selection
 selected_plane_icao = None
@@ -124,6 +135,13 @@ distance_filter_dragging = False
 rarity_filter_selected = set()
 radar_heatmap_enabled = False
 hide_planes_mode = 0
+show_all_trajectories = False
+AIRCRAFT_STAT_OPTIONS = (
+    "Airline", "Aircraft", "FlightNumber", "Speed",
+    "Altitude", "Squawk", "Hits", "Distance",
+)
+DEFAULT_AIRCRAFT_STATS = {"Airline", "Aircraft", "FlightNumber", "Altitude"}
+aircraft_stat_selected = set(DEFAULT_AIRCRAFT_STATS)
 distance_unit = "NM"
 tracker_status_connected = False
 tracker_device_stats = {"temp": None, "ram": None, "cpu": None, "disk": None}
@@ -160,7 +178,8 @@ def _main_impl(max_frames=None):
     global tracker_running, offline, selected_plane_icao, heatmap_hits, window
     global altitude_filter_threshold, altitude_filter_above, altitude_filter_dragging
     global distance_filter_threshold_km, distance_filter_outside, distance_filter_dragging
-    global radar_heatmap_enabled, hide_planes_mode, distance_unit, rarity_filter_selected
+    global radar_heatmap_enabled, hide_planes_mode, show_all_trajectories, distance_unit, rarity_filter_selected
+    global aircraft_stat_selected
     global tracker_capture_in_progress, tracker_photo_status, tracker_photo_plane_icao, tracking_mode_auto
     global camera_scroll_offset, planecam_auto_capture_last_time
 
@@ -191,6 +210,56 @@ def _main_impl(max_frames=None):
     _prev_target_icao_for_scroll = None
     closest_plane = None
     frames_rendered = 0
+
+    def _compact_stat_number(value, decimals=0):
+        try:
+            number = float(value)
+            if decimals:
+                return str(round(number, decimals))
+            return str(int(round(number)))
+        except (TypeError, ValueError):
+            return "-"
+
+    def _aircraft_stat_display(plane, option):
+        if option == "Airline":
+            value = plane.get("owner")
+            return (str(value), True) if value not in (None, "", "-") else ("Unknown Airline", False)
+        if option == "Aircraft":
+            parts = [str(plane.get(key)) for key in ("manufacturer", "model") if plane.get(key) not in (None, "", "-")]
+            return (" ".join(parts), True) if parts else ("Unknown Aircraft", False)
+        if option == "FlightNumber":
+            value = plane.get("flight")
+            return (str(value), True) if value not in (None, "", "-") else ("-", False)
+        if option == "Speed":
+            value = _compact_stat_number(plane.get("speed"))
+            return (f"{value}kt", True) if value != "-" else ("-", False)
+        if option == "Altitude":
+            value = _compact_stat_number(plane.get("altitude"))
+            return (f"{value}ft", True) if value != "-" else ("-", False)
+        if option == "Squawk":
+            value = plane.get("squawk")
+            return (str(value), True) if value not in (None, "", "-") else ("-", False)
+        if option == "Hits":
+            value = plane.get("total_hit_count")
+            return (str(int(value)), True) if value is not None else ("-", False)
+        if option == "Distance":
+            value = plane.get("distance")
+            if value in (None, "", "-"):
+                lat = plane.get("last_lat", plane.get("lat"))
+                lon = plane.get("last_lon", plane.get("lon"))
+                if lat not in (None, "", "-") and lon not in (None, "", "-"):
+                    value = functions.calculate_distance(
+                        float(_config["myLat"]), float(_config["myLon"]),
+                        float(lat), float(lon),
+                    )
+                    plane["distance"] = value
+            if value not in (None, "", "-"):
+                return (format_distance(value, distance_unit, 1), True)
+            return ("-", False)
+        return ("-", False)
+
+    def _aircraft_stat_available(plane, option):
+        return _aircraft_stat_display(plane, option)[1]
 
     while True:
         current_time = time.time()
@@ -237,12 +306,19 @@ def _main_impl(max_frames=None):
         altitude_slider_down_rect = pygame.Rect(slider_track_rect.right + 30, slider_track_rect.top + 24, 18, 14)
         distance_slider_up_rect = pygame.Rect(distance_slider_track_rect.right + 30, distance_slider_track_rect.top + 6, 18, 14)
         distance_slider_down_rect = pygame.Rect(distance_slider_track_rect.right + 30, distance_slider_track_rect.top + 24, 18, 14)
-        _rarity_col_x = filter_panel_rect.centerx
+        _rarity_col_x = filter_panel_rect.centerx - 20
         _rarity_row_h = 22
         _rarity_start_y = filter_panel_rect.top + 10
         rarity_checkbox_rects = {
             tier: pygame.Rect(_rarity_col_x, _rarity_start_y + i * _rarity_row_h, 14, 14)
             for i, (tier, _col, _label) in enumerate(RARITY_TIERS)
+        }
+        _aircraft_stat_x = filter_panel_rect.right - 140
+        _aircraft_stat_start_y = filter_panel_rect.top + 8
+        _aircraft_stat_row_h = 24
+        aircraft_stat_checkbox_rects = {
+            option: pygame.Rect(_aircraft_stat_x, _aircraft_stat_start_y + i * _aircraft_stat_row_h, 14, 14)
+            for i, option in enumerate(AIRCRAFT_STAT_OPTIONS)
         }
 
         _cam_box_w = int((SIDEBAR_WIDTH / 2) - 10)
@@ -264,6 +340,13 @@ def _main_impl(max_frames=None):
             last_system_stats_refresh = current_time
 
         displayed_planes_snapshot = snapshot_displayed_planes()
+        aircraft_stat_availability = {
+            option: any(
+                _aircraft_stat_available(display_data.get("plane_data", {}), option)
+                for display_data in displayed_planes_snapshot.values()
+            )
+            for option in AIRCRAFT_STAT_OPTIONS
+        }
 
         #Handle events
         for event in pygame.event.get():
@@ -361,6 +444,7 @@ def _main_impl(max_frames=None):
                     hide_planes_mode = 0
                     distance_unit = "NM"
                     rarity_filter_selected.clear()
+                    aircraft_stat_selected = set(DEFAULT_AIRCRAFT_STATS)
                     add_message("Filters reset to default")
                     continue
 
@@ -374,6 +458,18 @@ def _main_impl(max_frames=None):
                         _rarity_clicked = True
                         break
                 if _rarity_clicked:
+                    continue
+
+                _aircraft_stat_clicked = False
+                for _option, _stat_rect in aircraft_stat_checkbox_rects.items():
+                    if _stat_rect.collidepoint(mouse_x, mouse_y):
+                        if _option in aircraft_stat_selected:
+                            aircraft_stat_selected.remove(_option)
+                        else:
+                            aircraft_stat_selected.add(_option)
+                        _aircraft_stat_clicked = True
+                        break
+                if _aircraft_stat_clicked:
                     continue
 
                 for unit_key, rect in distance_unit_rects.items():
@@ -494,6 +590,15 @@ def _main_impl(max_frames=None):
                     auto_track_queue.clear()
                     auto_track_inside_icaos.clear()
                     add_message(f"Switched to {'auto' if tracking_mode_auto else 'manual'} camera tracking")
+                    continue
+
+                elif trajectory_toggle_rect.collidepoint(mouse_x, mouse_y):
+                    show_all_trajectories = not show_all_trajectories
+                    add_message(
+                        "Showing all aircraft trajectories"
+                        if show_all_trajectories
+                        else "Showing selected aircraft trajectory"
+                    )
                     continue
 
                 elif clear_graph_rect.collidepoint(mouse_x, mouse_y):
@@ -734,7 +839,7 @@ def _main_impl(max_frames=None):
                 rating = get_rarity_rating(plane.get('model', '-'), model_ratings)
                 rarity_col = get_rarity_colour(rating)
 
-                if icao == target_icao:
+                if show_all_trajectories or icao == target_icao:
                     location_history = plane.get("location_history", {})
                     if location_history and isinstance(location_history, dict) and len(location_history) > 1:
                         #Sort coordinates by timestamp to get chronological order
@@ -799,19 +904,25 @@ def _main_impl(max_frames=None):
                 window.blit(rotated_image, new_rect)
                 current_plane_rects[icao] = new_rect
 
-                #Labels
-                label_colour = rarity_col
-                flight = plane.get("flight", "-")
-                display_label = flight if (flight and flight != "-") else icao
+                # User-selected aircraft statistics, split around the icon.
                 if hide_planes_mode == 0:
-                    if not offline and plane.get('manufacturer') != "-":
-                        draw_text.fading(window, display_label, text_font3, label_colour, x, y - 26, fade_value)
-                        draw_text.fading(window, plane.get("owner", "-"), text_font3, label_colour, x, y - 13, fade_value)
-                        draw_text.fading(window, f"{plane.get('manufacturer')} {plane.get('model')}", text_font3, label_colour, x, y + 13, fade_value)
-                        draw_text.fading(window, f"{plane.get('altitude', '-')}ft", text_font3, label_colour, x, y + 26, fade_value)
-                    else:
-                        draw_text.fading(window, display_label, text_font3, label_colour, x, y - 13, fade_value)
-                        draw_text.fading(window, f"{plane.get('altitude', '-')}ft", text_font3, label_colour, x, y + 13, fade_value)
+                    selected_stats = [
+                        option for option in AIRCRAFT_STAT_OPTIONS
+                        if option in aircraft_stat_selected
+                    ]
+                    above_count = len(selected_stats) // 2
+                    above_stats = selected_stats[:above_count]
+                    below_stats = selected_stats[above_count:]
+                    for stat_index, option in enumerate(above_stats):
+                        stat_text, stat_available = _aircraft_stat_display(plane, option)
+                        stat_colour = rarity_col if stat_available else (100, 100, 100)
+                        stat_y = y - (13 * (len(above_stats) - stat_index))
+                        draw_text.fading(window, stat_text, text_font3, stat_colour, x, stat_y, fade_value)
+                    for stat_index, option in enumerate(below_stats):
+                        stat_text, stat_available = _aircraft_stat_display(plane, option)
+                        stat_colour = rarity_col if stat_available else (100, 100, 100)
+                        stat_y = y + (13 * (stat_index + 1))
+                        draw_text.fading(window, stat_text, text_font3, stat_colour, x, stat_y, fade_value)
 
             except Exception as e:
                 log.error(f"Draw error for {icao} at x={x} y={y}: {e}")
@@ -1098,6 +1209,18 @@ def _main_impl(max_frames=None):
             window, rarity_checkbox_rects, rarity_counts, rarity_filter_selected,
             RARITY_TIERS, draw_text, text_font3, pygame
         )
+        for option in AIRCRAFT_STAT_OPTIONS:
+            stat_rect = aircraft_stat_checkbox_rects[option]
+            unavailable_online = not offline and not aircraft_stat_availability.get(option, False)
+            checkbox_colour = (75, 75, 75) if unavailable_online else (160, 160, 160)
+            label_colour = (90, 90, 90) if unavailable_online else (255, 255, 255)
+            check_colour = (90, 90, 90) if unavailable_online else (0, 255, 0)
+            pygame.draw.rect(window, (20, 20, 20), stat_rect, 0)
+            pygame.draw.rect(window, checkbox_colour, stat_rect, 1)
+            if option in aircraft_stat_selected:
+                pygame.draw.line(window, check_colour, (stat_rect.left + 3, stat_rect.centery), (stat_rect.centerx, stat_rect.bottom - 4), 2)
+                pygame.draw.line(window, check_colour, (stat_rect.centerx, stat_rect.bottom - 4), (stat_rect.right - 3, stat_rect.top + 3), 2)
+            draw_text.normal(window, option, graph_time_font, label_colour, stat_rect.right + 5, stat_rect.top)
 
         #INFO BOX â€” polar plot + system stats
         info_box_rect = pygame.Rect(SIDEBAR_X + 5, logs_y, int((SIDEBAR_WIDTH / 2) - 10), filter_panel_rect.height)
@@ -1235,6 +1358,7 @@ def _main_impl(max_frames=None):
             (restart_button_rect, restart_icon),
             (clear_graph_rect, clear_graph_icon),
             (off_button_rect, shutdown_icon),
+            (trajectory_toggle_rect, show_trajectories_icon if show_all_trajectories else hide_trajectories_icon),
         ]
         for rect, icon in toolbar_buttons:
             pygame.draw.rect(window, (255, 255, 255), rect, 0)
