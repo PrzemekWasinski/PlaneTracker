@@ -792,6 +792,9 @@ def adsb_processing_thread():
                 effective_offline = offline or not network_available
 
                 is_new_plane = False
+                current_epoch = time.time()
+                current_messages = plane_data.get("messages")
+                current_seen = plane_data.get("seen")
                 with data_lock:
                     if icao in active_planes:
                         cached = active_planes[icao]
@@ -813,9 +816,9 @@ def adsb_processing_thread():
                         plane_data["altitude_history"] = cached.get("altitude_history", deque())
                         plane_data["hit_history"] = cached.get("hit_history", deque())
                         plane_data["last_hit_bucket"] = cached.get("last_hit_bucket")
-                        plane_data["last_hit_bucket"] = cached.get("last_hit_bucket")
                         plane_data["last_hit_count"] = cached.get("last_hit_count", 0)
                         plane_data["total_hit_count"] = cached.get("total_hit_count", 0)
+                        plane_data["last_message_count"] = cached.get("last_message_count", cached.get("messages"))
                     else:
                         is_new_plane = True
                         plane_data["manufacturer"] = "-"
@@ -831,11 +834,34 @@ def adsb_processing_thread():
                         plane_data["last_hit_bucket"] = None
                         plane_data["last_hit_count"] = 0
                         plane_data["total_hit_count"] = 0
+                        plane_data["last_message_count"] = None
+
+                    previous_messages = plane_data.get("last_message_count")
+                    if isinstance(current_messages, int):
+                        has_new_hit = previous_messages != current_messages
+                    elif current_seen != "-":
+                        try:
+                            has_new_hit = float(current_seen) <= 1.5
+                        except (TypeError, ValueError):
+                            has_new_hit = is_new_plane
+                    else:
+                        has_new_hit = is_new_plane
+
+                    if is_new_plane and not has_new_hit:
+                        continue
+
+                    if not has_new_hit:
+                        plane_data["last_lat"] = cached.get("last_lat", plane_data["lat"])
+                        plane_data["last_lon"] = cached.get("last_lon", plane_data["lon"])
+                        plane_data["last_update_time"] = cached.get("last_update_time", current_epoch)
+                        active_planes[icao] = plane_data
+                        continue
+
                     plane_data["last_lat"] = float(plane_data["lat"])
                     plane_data["last_lon"] = float(plane_data["lon"])
-                    plane_data["last_update_time"] = time.time()
+                    plane_data["last_update_time"] = current_epoch
+                    plane_data["last_message_count"] = current_messages if isinstance(current_messages, int) else previous_messages
                     current_timestamp = plane_data.get("spotted_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                    current_epoch = time.time()
                     history_timestamp = f"{current_epoch:.6f}"
                     plane_data["history_timestamp"] = history_timestamp
                     bearing = functions.calculate_bearing(_config['myLat'], _config['myLon'], plane_data["last_lat"], plane_data["last_lon"])
@@ -948,6 +974,7 @@ def adsb_processing_thread():
             try:
                 total = new_stats.get('total', 0) if new_stats else 0
                 if total > 0:
+                    _update_flight_stats_cache(new_stats)
                     if _stats_uploader is not None:
                         _stats_uploader(new_stats)
                         add_message(f"Firebase updated: {total} aircraft")
@@ -1014,49 +1041,59 @@ _flight_stats_cache = {
     'avg_altitude': None,
     'avg_speed': None,
     'max_speed': None,
+    'max_hits': None,
     'avg_mach': None,
     'last_updated': None,
 }
 _flight_stats_lock = threading.Lock()
+FLIGHT_STATS_REFRESH_SECONDS = 5 * 60
 #Own single-worker process pool: keeps this refresh's pandas/CSV work off the
 #render thread's GIL, same reasoning as the pool in adsb_processing_thread.
 _flight_stats_pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
 
 
-def _load_flight_stats():
+def _update_flight_stats_cache(new_stats):
     global _flight_stats_cache
+    if not new_stats or new_stats.get('total', 0) <= 0:
+        return False
+
+    with _flight_stats_lock:
+        # A newly-created CSV can briefly contain aircraft whose API metadata
+        # has not arrived yet. Keep the last meaningful category values instead
+        # of flashing 0 / "-" in the UI.
+        for key in ('top_model', 'top_manufacturer', 'top_aircraft', 'top_airline'):
+            if not new_stats.get(key, {}).get('name') and _flight_stats_cache.get(key, {}).get('name'):
+                new_stats[key] = dict(_flight_stats_cache[key])
+        for key in ('unique_airlines', 'unique_models', 'unique_manufacturers'):
+            if not new_stats.get(key) and _flight_stats_cache.get(key):
+                new_stats[key] = _flight_stats_cache[key]
+        if not new_stats.get('manufacturer_breakdown') and _flight_stats_cache.get('manufacturer_breakdown'):
+            new_stats['manufacturer_breakdown'] = dict(_flight_stats_cache['manufacturer_breakdown'])
+        for key in ('furthest_detected', 'furthest_plane', 'highest_detected', 'avg_altitude', 'avg_speed', 'max_speed', 'max_hits', 'avg_mach'):
+            if new_stats.get(key) is None and _flight_stats_cache.get(key) is not None:
+                new_stats[key] = _flight_stats_cache[key]
+        _flight_stats_cache = new_stats
+    return True
+
+
+def _load_flight_stats():
     try:
         new_stats = _flight_stats_pool.submit(
             functions.get_stats, _config['myLat'], _config['myLon'],
             flight_history_dir=FLIGHT_HISTORY_DIR,
         ).result()
-        if new_stats and new_stats.get('total', 0) > 0:
-            with _flight_stats_lock:
-                # A newly-created CSV can briefly contain aircraft whose API
-                # metadata has not arrived yet. Keep the last meaningful
-                # category values instead of flashing 0 / "-" in the UI.
-                for key in ('top_model', 'top_manufacturer', 'top_aircraft', 'top_airline'):
-                    if not new_stats.get(key, {}).get('name') and _flight_stats_cache.get(key, {}).get('name'):
-                        new_stats[key] = dict(_flight_stats_cache[key])
-                for key in ('unique_airlines', 'unique_models', 'unique_manufacturers'):
-                    if not new_stats.get(key) and _flight_stats_cache.get(key):
-                        new_stats[key] = _flight_stats_cache[key]
-                if not new_stats.get('manufacturer_breakdown') and _flight_stats_cache.get('manufacturer_breakdown'):
-                    new_stats['manufacturer_breakdown'] = dict(_flight_stats_cache['manufacturer_breakdown'])
-                for key in ('furthest_detected', 'furthest_plane', 'highest_detected', 'avg_altitude', 'avg_speed', 'max_speed', 'avg_mach'):
-                    if new_stats.get(key) is None and _flight_stats_cache.get(key) is not None:
-                        new_stats[key] = _flight_stats_cache[key]
-                _flight_stats_cache = new_stats
-        else:
+        if not _update_flight_stats_cache(new_stats):
             log.warning(f"Flight stats: get_stats returned empty (total={new_stats.get('total') if new_stats else None})")
     except Exception as e:
         log.warning(f"Flight stats refresh error: {e}", exc_info=True)
 
 
 def flight_stats_refresh_thread():
+    # Populate the complete rolling 24-hour dashboard immediately, then
+    # periodically rescan it for new records and ranking changes.
     _load_flight_stats()
     while tracker_running:
-        time.sleep(60)
+        time.sleep(FLIGHT_STATS_REFRESH_SECONDS)
         _load_flight_stats()
 
 
@@ -1140,7 +1177,7 @@ def initialise_preview_state():
         'furthest_detected': 241.8, 'highest_detected': 41000,
         'unique_airlines': 22, 'unique_models': 34, 'unique_manufacturers': 12,
         'emergencies_count': 0, 'avg_altitude': 26750, 'avg_speed': 384,
-        'max_speed': 552, 'avg_mach': 0.67, 'last_updated': datetime.now().isoformat(),
+        'max_speed': 552, 'max_hits': 84, 'avg_mach': 0.67, 'last_updated': datetime.now().isoformat(),
     }
 
 def start_background_services():

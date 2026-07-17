@@ -157,6 +157,7 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
         'avg_altitude': None,
         'avg_speed': None,
         'max_speed': None,
+        'max_hits': None,
         'avg_mach': None,
         'last_updated': strftime('%H:%M:%S', localtime()),
     }
@@ -242,6 +243,27 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
             df = df.drop_duplicates(subset=["icao", "first_seen"])
 
         total = len(df)
+
+        # Each location-history entry represents one recorded aircraft
+        # position/hit. The dashboard record is the largest history belonging
+        # to a single flight in the rolling 24-hour CSV window.
+        max_hits = None
+        if 'location_history' in df.columns:
+            def _location_history_length(value):
+                if isinstance(value, dict):
+                    return len(value)
+                if not isinstance(value, str) or not value.strip():
+                    return 0
+                # save_flight_history serialises this as
+                # {timestamp: [latitude, longitude], ...}. Each dictionary
+                # entry therefore contains exactly one opening square bracket.
+                # Counting those entries avoids literal_eval constructing the
+                # enormous dictionaries again during every statistics refresh.
+                return value.count('[')
+
+            history_lengths = df['location_history'].map(_location_history_length)
+            if not history_lengths.empty:
+                max_hits = int(history_lengths.max())
 
         def _top(series):
             counts = series.dropna().value_counts()
@@ -343,6 +365,7 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
             'avg_altitude': avg_altitude,
             'avg_speed': avg_speed,
             'max_speed': max_speed,
+            'max_hits': max_hits,
             'avg_mach': avg_mach,
             'last_updated': strftime('%H:%M:%S', localtime()),
         }

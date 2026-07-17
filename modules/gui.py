@@ -304,6 +304,38 @@ def _main_impl(max_frames=None):
     def _aircraft_stat_available(plane, option):
         return _aircraft_stat_display(plane, option)[1]
 
+    def _active_plane_position(display_data, now):
+        if not display_data or display_data.get("display_until", 0) <= now:
+            return None
+        plane = display_data.get("plane_data", {})
+        try:
+            lat = float(plane.get("last_lat"))
+            lon = float(plane.get("last_lon"))
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(lat) or not math.isfinite(lon):
+            return None
+        return lat, lon
+
+    def _closest_active_plane(snapshot, now):
+        closest_icao = None
+        closest_position = None
+        closest_distance = float("inf")
+        home_lat = float(_config["myLat"])
+        home_lon = float(_config["myLon"])
+        for icao, display_data in snapshot.items():
+            position = _active_plane_position(display_data, now)
+            if position is None:
+                continue
+            distance = functions.calculate_distance(
+                home_lat, home_lon, position[0], position[1]
+            )
+            if distance < closest_distance:
+                closest_icao = icao
+                closest_position = position
+                closest_distance = distance
+        return closest_icao, closest_position
+
     while True:
         current_time = time.time()
 
@@ -647,7 +679,18 @@ def _main_impl(max_frames=None):
 
                 elif clear_graph_rect.collidepoint(mouse_x, mouse_y):
                     follow_selected_plane = not follow_selected_plane
-                    if not follow_selected_plane:
+                    if follow_selected_plane:
+                        followed_position = _active_plane_position(
+                            displayed_planes_snapshot.get(selected_plane_icao),
+                            current_time,
+                        )
+                        if followed_position is None:
+                            selected_plane_icao, followed_position = _closest_active_plane(
+                                displayed_planes_snapshot, current_time
+                            )
+                        if followed_position is not None:
+                            view_center_lat, view_center_lon = followed_position
+                    else:
                         view_center_lat = float(_config['myLat'])
                         view_center_lon = float(_config['myLon'])
                     add_message(
@@ -697,17 +740,16 @@ def _main_impl(max_frames=None):
 
         refresh_tracker_photo_surface()
 
-        if follow_selected_plane and selected_plane_icao:
-            followed_display = displayed_planes_snapshot.get(selected_plane_icao)
-            followed_data = followed_display.get("plane_data", {}) if followed_display else {}
-            try:
-                followed_lat = float(followed_data.get("last_lat"))
-                followed_lon = float(followed_data.get("last_lon"))
-                if math.isfinite(followed_lat) and math.isfinite(followed_lon):
-                    view_center_lat = followed_lat
-                    view_center_lon = followed_lon
-            except (TypeError, ValueError):
-                pass
+        if follow_selected_plane:
+            followed_position = _active_plane_position(
+                displayed_planes_snapshot.get(selected_plane_icao), current_time
+            )
+            if followed_position is None:
+                selected_plane_icao, followed_position = _closest_active_plane(
+                    displayed_planes_snapshot, current_time
+                )
+            if followed_position is not None:
+                view_center_lat, view_center_lon = followed_position
 
         #Clear screen
         pygame.draw.rect(window, (0, 0, 0), (0, 0, width, height))
@@ -780,7 +822,8 @@ def _main_impl(max_frames=None):
         min_dist = float('inf')
         
         
-        #Calculate distances using view_center instead of config location
+        # Aircraft distance and filtering are always relative to the receiver,
+        # even when selected-plane follow moves the radar's visual centre.
         for icao, display_data in displayed_planes_snapshot.items():
             plane = display_data.get("plane_data", {})
             if not plane_matches_altitude_filter(plane, altitude_filter_threshold, altitude_filter_above):
@@ -793,7 +836,10 @@ def _main_impl(max_frames=None):
             lat = plane.get("last_lat")
             lon = plane.get("last_lon")
             if lat is not None and lon is not None:
-                dist = functions.calculate_distance(view_center_lat, view_center_lon, float(lat), float(lon))
+                dist = functions.calculate_distance(
+                    float(_config["myLat"]), float(_config["myLon"]),
+                    float(lat), float(lon),
+                )
                 plane["distance"] = dist
                 if distance_filter_threshold_km > 0:
                     if distance_filter_outside and dist < distance_filter_threshold_km:
@@ -1085,7 +1131,7 @@ def _main_impl(max_frames=None):
         avg_alt_text = f"{stats['avg_altitude']:,}ft" if stats.get('avg_altitude') is not None else '-'
         avg_spd_text = f"{stats['avg_speed']}kts" if stats.get('avg_speed') is not None else '-'
         max_spd_text = f"{stats['max_speed']}kts" if stats.get('max_speed') is not None else '-'
-        avg_mach_text = f"{stats['avg_mach']:.3f}" if stats.get('avg_mach') is not None else '-'
+        max_hits_text = f"{stats['max_hits']:,}" if stats.get('max_hits') is not None else '-'
         top_airline_name = (stats['top_airline']['name'] or '-')[:16]
         top_mfr_name = (stats['top_manufacturer']['name'] or '-')[:14]
         top_aircraft_name = (stats['top_aircraft']['name'] or '-')[:16]
@@ -1101,7 +1147,7 @@ def _main_impl(max_frames=None):
         draw_text.normal(window, f"Top Aircraft: {top_aircraft_name}", text_font3, (255, 255, 255), col1, sys_y + _sp * 6 + 15)
 
         draw_text.normal(window, f"Max Spd: {max_spd_text}", text_font3, (255, 255, 255), col_r, sys_y)
-        draw_text.normal(window, f"Avg Mach: {avg_mach_text}", text_font3, (255, 255, 255), col_r, sys_y + _sp)
+        draw_text.normal(window, f"Max Hits: {max_hits_text}", text_font3, (255, 255, 255), col_r, sys_y + _sp)
         draw_text.normal(window, f"Furthest: {furthest_text}", text_font3, (255, 255, 255), col_r, sys_y + _sp * 2)
         draw_text.normal(window, f"Highest: {highest_text}", text_font3, (255, 255, 255), col_r, sys_y + _sp * 3)
 
