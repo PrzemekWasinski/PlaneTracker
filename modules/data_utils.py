@@ -170,13 +170,12 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
     if not rolling_paths:
         # Preserve the existing fallback for archived/development datasets.
         all_files = sorted(_glob.glob(os.path.join(flight_history_dir, '????-??-??.csv')))
-        if not all_files:
-            return default_stats
-        rolling_paths = [all_files[-1]]
+        if all_files:
+            rolling_paths = [all_files[-1]]
 
     try:
         frames = [pd.read_csv(csv_path, low_memory=False) for csv_path in rolling_paths]
-        df = pd.concat(frames, ignore_index=True)
+        df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
         # Coerce numeric columns exactly as stats.py does
         for col in _STATS_NUMERIC_COLS:
@@ -194,6 +193,44 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
             if "first_seen" in df.columns:
                 recent |= df["first_seen"] >= cutoff
             df = df.loc[recent]
+
+        # stats_history/stats.csv is updated as soon as API metadata arrives,
+        # while the daily flight-history writer intentionally runs in batches.
+        # At startup (especially just after midnight) the daily file may not
+        # exist yet or may contain only incomplete rows. Use the durable
+        # aircraft index as a fallback/enrichment source instead of briefly
+        # publishing an all-zero dashboard.
+        stats_index_path = os.path.join(
+            os.path.dirname(os.path.abspath(flight_history_dir)),
+            'stats_history',
+            'stats.csv',
+        )
+        index_df = None
+        if os.path.exists(stats_index_path):
+            try:
+                index_df = pd.read_csv(stats_index_path, low_memory=False)
+                index_df = index_df.rename(columns={
+                    'airline': 'owner',
+                    'timestamp': 'last_seen',
+                })
+                if 'last_seen' in index_df.columns:
+                    index_df['last_seen'] = pd.to_datetime(index_df['last_seen'], errors='coerce')
+                    index_df = index_df.loc[index_df['last_seen'] >= cutoff]
+            except (OSError, ValueError, pd.errors.ParserError, UnicodeDecodeError):
+                index_df = None
+
+        if index_df is not None and not index_df.empty:
+            if df.empty:
+                df = index_df.copy()
+            elif 'icao' in df.columns and 'icao' in index_df.columns:
+                lookup = index_df.drop_duplicates('icao', keep='last').set_index('icao')
+                for col in ('manufacturer', 'model', 'owner', 'registration'):
+                    if col not in lookup.columns:
+                        continue
+                    if col not in df.columns:
+                        df[col] = pd.NA
+                    missing = df[col].isna() | df[col].astype(str).str.strip().isin(('', '-', 'none', 'None'))
+                    df.loc[missing, col] = df.loc[missing, 'icao'].map(lookup[col])
 
         # Clean string columns exactly as stats.py does
         for col in ("owner", "manufacturer", "model", "category", "emergency", "registration"):
@@ -626,16 +663,28 @@ def save_flight_history(planes_dict, history_dir=FLIGHT_HISTORY_DIR, on_error=No
 
                     first_seen = existing.get(icao, {}).get('first_seen') or now_str
 
+                    previous = existing.get(icao, {})
+
+                    def durable_value(field):
+                        value = plane.get(field, '-')
+                        if value is None or str(value).strip() in ('', '-', 'none', 'None'):
+                            old_value = previous.get(field, '-')
+                            if old_value is not None and str(old_value).strip() not in ('', '-', 'none', 'None'):
+                                return old_value
+                        return value
+
                     existing[icao] = {
                         'icao': icao,
                         'flight': plane.get('flight', '-'),
                         'squawk': plane.get('squawk', '-'),
                         'category': plane.get('category', '-'),
                         'emergency': plane.get('emergency', '-'),
-                        'manufacturer': plane.get('manufacturer', '-'),
-                        'registration': plane.get('registration', '-'),
-                        'model': plane.get('model', '-'),
-                        'owner': plane.get('owner', '-'),
+                        # API/cache outages must never erase metadata that was
+                        # successfully persisted by an earlier batch.
+                        'manufacturer': durable_value('manufacturer'),
+                        'registration': durable_value('registration'),
+                        'model': durable_value('model'),
+                        'owner': durable_value('owner'),
                         'rating': plane.get('rating', '-'),
                         'altitude': plane.get('altitude', '-'),
                         'alt_geom': plane.get('alt_geom', '-'),

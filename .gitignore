@@ -6,24 +6,24 @@ __pycache__
 
 #.csv flight history
 stats_history/
-2*.csv
+2*.csv*
 
 #Config files
-/config/config.yml
+config/config.yml
 firebase.json
+
+#Cache
 icao_cache.json
 
 #virtual environemnt
-/venv/
+venv/
 
 #GUI elements
-/textures
+textures/
 
 #Log files
 *.log
 
-#Firebase data and scripts
-firebase/
-
 #PlaneCam Images
-images/
+images
+screenshots

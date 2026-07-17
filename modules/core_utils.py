@@ -44,7 +44,7 @@ def restart_script():
     os.execv(sys.executable, [sys.executable, *sys.argv])
 
 
-def coords_to_xy(lat, lon, range_km, centre_lat, centre_lon, screen_width, screen_height, center_x=None, center_y=None):
+def coords_to_xy(lat, lon, range_km, centre_lat, centre_lon, screen_width, screen_height, center_x=None, center_y=None, projection_lat=None):
     if center_x is None:
         center_x = screen_width // 2
     if center_y is None:
@@ -54,7 +54,9 @@ def coords_to_xy(lat, lon, range_km, centre_lat, centre_lon, screen_width, scree
     delta_lat = lat - centre_lat
     delta_lon = lon - centre_lon
     dy = delta_lat * 111
-    dx = delta_lon * 111 * math.cos(math.radians(centre_lat))
+    if projection_lat is None:
+        projection_lat = centre_lat
+    dx = delta_lon * 111 * math.cos(math.radians(projection_lat))
     x = center_x + int(dx / km_per_px)
     y = center_y - int(dy / km_per_px)
     return x, y

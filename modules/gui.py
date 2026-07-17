@@ -1,9 +1,3 @@
-"""Pygame presentation layer for PlaneTracker.
-
-All live tracking, persistence, networking, camera, and production service
-state is owned by :mod:`plane_tracker`.
-"""
-
 import sys
 from pathlib import Path
 from types import FunctionType
@@ -15,6 +9,7 @@ import plane_tracker as app
 
 pygame = app.pygame
 os = app.os
+functions = app.functions
 _config = app._config
 deque = app.deque
 IS_WINDOWS = app.IS_WINDOWS
@@ -26,24 +21,14 @@ pygame.init()
 width = _config['screenWidth']
 height = _config['screenHeight']
 development_mode = DEFAULT_PREVIEW
-window_flags = pygame.FULLSCREEN
 
 
-def _create_fullscreen():
-    """Create one verified fullscreen surface on every platform."""
-    requested_size = (0, 0) if IS_WINDOWS else (width, height)
-    surface = pygame.display.set_mode(requested_size, pygame.FULLSCREEN)
-    if surface.get_flags() & pygame.FULLSCREEN:
-        return surface
-
-    # SDL can silently reject an exclusive mode. A desktop-sized borderless
-    # window is the final fallback and still covers the entire display.
-    os.environ["SDL_VIDEO_WINDOW_POS"] = "0,0"
-    desktop_size = pygame.display.get_desktop_sizes()[0]
-    return pygame.display.set_mode(desktop_size, pygame.NOFRAME)
+def _create_window():
+    pygame.display.set_caption("PlaneTracker")
+    return pygame.display.set_mode((width, height), pygame.FULLSCREEN)
 
 
-window = _create_fullscreen()
+window = _create_window()
 
 #Fonts
 text_font1 = pygame.font.Font(os.path.join("textures", "fonts", "NaturalMono-Bold.ttf"), 16)
@@ -60,17 +45,15 @@ online_mode_icon = pygame.image.load(os.path.join("textures", "icons", "online_m
 offline_mode_icon = pygame.image.load(os.path.join("textures", "icons", "offline_mode.png")).convert_alpha()
 shutdown_icon = pygame.image.load(os.path.join("textures", "icons", "shutdown.png")).convert_alpha()
 restart_icon = pygame.image.load(os.path.join("textures", "icons", "restart.png")).convert_alpha()
-clear_graph_icon = pygame.image.load(os.path.join("textures", "icons", "clear_graph.png")).convert_alpha()
 track_target_icon = pygame.image.load(os.path.join("textures", "icons", "track_target.png")).convert_alpha()
 auto_tracking_icon = pygame.image.load(os.path.join("textures", "icons", "auto_tracking.png")).convert_alpha()
 manual_tracking_icon = pygame.image.load(os.path.join("textures", "icons", "manual_tracking.png")).convert_alpha()
-heatmap_on_icon = pygame.image.load(os.path.join("textures", "icons", "heatmap_on.png")).convert_alpha()
-heatmap_off_icon = pygame.image.load(os.path.join("textures", "icons", "heatmap_off.png")).convert_alpha()
 plane_only_mode_icon = pygame.image.load(os.path.join("textures", "icons", "plane.png")).convert_alpha()
 plane_and_text_mode_icon = pygame.image.load(os.path.join("textures", "icons", "plane_and_text.png")).convert_alpha()
 hide_plane_mode_icon = pygame.image.load(os.path.join("textures", "icons", "hide_plane.png")).convert_alpha()
 hide_trajectories_icon = pygame.image.load(os.path.join("textures", "icons", "hide_trajectories.png")).convert_alpha()
 show_trajectories_icon = pygame.image.load(os.path.join("textures", "icons", "show_trajectories.png")).convert_alpha()
+screenshot_icon = pygame.image.load(os.path.join("textures", "icons", "screenshot.png")).convert_alpha()
 clear_filters_icon = pygame.image.load(os.path.join("textures", "icons", "clear_filters.png")).convert_alpha()
 plane_icon = pygame.image.load(os.path.join("textures", "icons", "plane_icon.png")).convert_alpha()
 selected_plane_icon = pygame.image.load(os.path.join("textures", "icons", "selected_plane.png")).convert_alpha()
@@ -83,6 +66,8 @@ RADAR_CENTER_X = RADAR_RECT.centerx
 RADAR_CENTER_Y = RADAR_RECT.centery
 RADAR_RADIUS = 540
 RADAR_RANGE_VALUES = list(range(25, 1001, 25))
+MIN_RADAR_RANGE_KM = 25
+MAX_RADAR_RANGE_KM = 300 * 1.852  # 300 nautical miles
 RADAR_MAP_DIR = os.path.join('textures', 'radar_map')
 
 radar_map_images = {}
@@ -94,6 +79,65 @@ for radar_range_km in RADAR_RANGE_VALUES:
             radar_map_images[radar_range_km].set_colorkey((0, 0, 0))
         except pygame.error:
             pass
+
+
+def _zoom_in_range(range_km):
+    if range_km >= MAX_RADAR_RANGE_KM:
+        return min(550, MAX_RADAR_RANGE_KM)
+    return max(MIN_RADAR_RANGE_KM, range_km - 25)
+
+
+def _zoom_out_range(range_km):
+    return min(MAX_RADAR_RANGE_KM, range_km + 25)
+
+
+def _radar_map_for_view(range_km, view_center_lat, view_center_lon):
+    """Return the smallest map containing the complete shifted viewport."""
+    if not radar_map_images:
+        return None, None
+    offset_km = functions.calculate_distance(
+        float(_config['myLat']), float(_config['myLon']),
+        float(view_center_lat), float(view_center_lon),
+    )
+    required_range = offset_km + range_km
+    containing_ranges = [
+        value for value in radar_map_images
+        if value >= required_range
+    ]
+    map_range = (
+        min(containing_ranges)
+        if containing_ranges
+        else max(radar_map_images)
+    )
+    return radar_map_images[map_range], map_range
+
+
+def _render_radar_map_view(map_image, map_range, range_km, view_center_lat, view_center_lon):
+    """Extract the current viewport from a complete home-centred map."""
+    source_width, source_height = map_image.get_size()
+    source_center_x, source_center_y = functions.coords_to_xy(
+        float(view_center_lat), float(view_center_lon), map_range,
+        float(_config['myLat']), float(_config['myLon']),
+        source_width, source_height, source_width // 2, source_height // 2,
+        float(_config['myLat']),
+    )
+    crop_width = max(1, round(source_width * range_km / map_range))
+    crop_height = max(1, round(source_height * range_km / map_range))
+    crop_rect = pygame.Rect(
+        round(source_center_x - crop_width / 2),
+        round(source_center_y - crop_height / 2),
+        crop_width,
+        crop_height,
+    )
+
+    # Padding makes even a position beyond the largest available source map
+    # safe; normally the wider map selected above fully covers this surface.
+    map_view = pygame.Surface(crop_rect.size)
+    map_view.blit(map_image, (-crop_rect.left, -crop_rect.top))
+    if map_view.get_size() != RADAR_RECT.size:
+        map_view = pygame.transform.smoothscale(map_view, RADAR_RECT.size)
+    map_view.set_colorkey((0, 0, 0))
+    return map_view
 
 #Sidebar settings
 SIDEBAR_X = 1090
@@ -121,7 +165,7 @@ auto_track_mode_rect = pygame.Rect(toolbar_button_x(3), height - 50, btn_w, btn_
 restart_button_rect = pygame.Rect(toolbar_button_x(4), height - 50, btn_w, btn_h)
 off_button_rect = pygame.Rect(toolbar_button_x(5), height - 50, btn_w, btn_h)
 clear_graph_rect = pygame.Rect(toolbar_button_x(6), height - 50, btn_w, btn_h)
-trajectory_toggle_rect = pygame.Rect(toolbar_button_x(7), height - 50, btn_w, btn_h)
+screenshot_button_rect = pygame.Rect(toolbar_button_x(7), height - 50, btn_w, btn_h)
 
 #Global for plane selection
 selected_plane_icao = None
@@ -201,6 +245,7 @@ def _main_impl(max_frames=None):
 
     view_center_lat = _config['myLat']
     view_center_lon = _config['myLon']
+    follow_selected_plane = False
     plane_headings = {}
     log_scroll_offset = 0
     log_scroll_dragging = False
@@ -281,7 +326,7 @@ def _main_impl(max_frames=None):
         log_bottom_row_y = filter_panel_rect.bottom + 10
         log_h_early = (height - 10) - log_bottom_row_y
         log_box_rect = pygame.Rect(filter_panel_rect.left, log_bottom_row_y, filter_panel_rect.width, log_h_early)
-        heatmap_button_rect = pygame.Rect(filter_panel_rect.right - 48, filter_panel_rect.top + 8, 40, 40)
+        trajectory_toggle_rect = pygame.Rect(filter_panel_rect.right - 48, filter_panel_rect.top + 8, 40, 40)
         hide_planes_button_rect = pygame.Rect(filter_panel_rect.right - 48, filter_panel_rect.top + 56, 40, 40)
         reset_filters_button_rect = pygame.Rect(filter_panel_rect.right - 48, filter_panel_rect.top + 104, 40, 40)
         distance_unit_rects = {
@@ -373,11 +418,9 @@ def _main_impl(max_frames=None):
                 elif RADAR_RECT.collidepoint(mouse_x, mouse_y):
                     #Scroll up = zoom in, scroll down = zoom out
                     if event.y > 0:  #Scroll up
-                        if range_km > 25:
-                            range_km -= 25
+                        range_km = _zoom_in_range(range_km)
                     elif event.y < 0:  #Scroll down
-                        if range_km < 1000:
-                            range_km += 25
+                        range_km = _zoom_out_range(range_km)
 
             elif event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 1:
@@ -418,9 +461,13 @@ def _main_impl(max_frames=None):
                     log_scroll_drag_start_offset = log_scroll_offset
                     continue
 
-                if heatmap_button_rect.collidepoint(mouse_x, mouse_y):
-                    radar_heatmap_enabled = not radar_heatmap_enabled
-                    add_message("Heatmap enabled" if radar_heatmap_enabled else "Heatmap disabled")
+                if trajectory_toggle_rect.collidepoint(mouse_x, mouse_y):
+                    show_all_trajectories = not show_all_trajectories
+                    add_message(
+                        "Showing all aircraft trajectories"
+                        if show_all_trajectories
+                        else "Showing selected aircraft trajectory"
+                    )
                     continue
 
                 if hide_planes_button_rect.collidepoint(mouse_x, mouse_y):
@@ -571,12 +618,10 @@ def _main_impl(max_frames=None):
                     continue
                 
                 elif zoom_in_ctrl_rect.collidepoint(mouse_x, mouse_y):
-                    if range_km > 25:
-                        range_km -= 25
+                    range_km = _zoom_in_range(range_km)
 
                 elif zoom_out_ctrl_rect.collidepoint(mouse_x, mouse_y): #Zoom out
-                    if range_km < 1000:
-                        range_km += 25
+                    range_km = _zoom_out_range(range_km)
 
                 elif mode_toggle_rect.collidepoint(mouse_x, mouse_y):
                     offline = not offline
@@ -592,27 +637,27 @@ def _main_impl(max_frames=None):
                     add_message(f"Switched to {'auto' if tracking_mode_auto else 'manual'} camera tracking")
                     continue
 
-                elif trajectory_toggle_rect.collidepoint(mouse_x, mouse_y):
-                    show_all_trajectories = not show_all_trajectories
-                    add_message(
-                        "Showing all aircraft trajectories"
-                        if show_all_trajectories
-                        else "Showing selected aircraft trajectory"
-                    )
+                elif screenshot_button_rect.collidepoint(mouse_x, mouse_y):
+                    screenshots_dir = PROJECT_ROOT / "screenshots"
+                    screenshot_path = screenshots_dir / f"plane_tracker_{datetime.now():%Y%m%d_%H%M%S_%f}.png"
+                    try:
+                        screenshots_dir.mkdir(parents=True, exist_ok=True)
+                        pygame.image.save(window, str(screenshot_path))
+                        add_message(f"Screenshot saved: {screenshot_path.name}")
+                    except (OSError, pygame.error) as exc:
+                        add_message(f"Screenshot failed: {exc}")
                     continue
 
                 elif clear_graph_rect.collidepoint(mouse_x, mouse_y):
-                    with data_lock:
-                        active_count_history.clear()
-                        total_seen_history.clear()
-                        directional_hit_history.clear()
-                    top_graph_last_bucket = None
-                    if runtime_mode == "preview":
-                        add_message("Preview graph history cleared")
-                    elif clear_top_graph_history(TOP_GRAPH_HISTORY_DIR, current_time):
-                        add_message("Graph history cleared")
-                    else:
-                        add_message("Graph history clear failed")
+                    follow_selected_plane = not follow_selected_plane
+                    if not follow_selected_plane:
+                        view_center_lat = float(_config['myLat'])
+                        view_center_lon = float(_config['myLon'])
+                    add_message(
+                        "Selected-plane follow enabled"
+                        if follow_selected_plane
+                        else "Selected-plane follow disabled; radar centred on home"
+                    )
                     continue
 
                 elif restart_button_rect.collidepoint(mouse_x, mouse_y) or off_button_rect.collidepoint(mouse_x, mouse_y):
@@ -620,7 +665,7 @@ def _main_impl(max_frames=None):
                         if restart_button_rect.collidepoint(mouse_x, mouse_y):
                             pygame.display.quit()
                             pygame.display.init()
-                            window = _create_fullscreen()
+                            window = _create_window()
                             initialise_preview_state()
                             add_message("Preview restarted")
                             continue
@@ -655,17 +700,41 @@ def _main_impl(max_frames=None):
 
         refresh_tracker_photo_surface()
 
+        if follow_selected_plane and selected_plane_icao:
+            followed_display = displayed_planes_snapshot.get(selected_plane_icao)
+            followed_data = followed_display.get("plane_data", {}) if followed_display else {}
+            try:
+                followed_lat = float(followed_data.get("last_lat"))
+                followed_lon = float(followed_data.get("last_lon"))
+                if math.isfinite(followed_lat) and math.isfinite(followed_lon):
+                    view_center_lat = followed_lat
+                    view_center_lon = followed_lon
+            except (TypeError, ValueError):
+                pass
+
         #Clear screen
         pygame.draw.rect(window, (0, 0, 0), (0, 0, width, height))
         
         #Draw radar section with clipping
         window.set_clip(RADAR_RECT)
 
-        radar_map_image = radar_map_images.get(range_km)
+        home_x, home_y = functions.coords_to_xy(
+            _config['myLat'], _config['myLon'], range_km,
+            view_center_lat, view_center_lon, width, height,
+            RADAR_CENTER_X, RADAR_CENTER_Y, _config['myLat']
+        )
+        radar_map_source, radar_map_range = _radar_map_for_view(
+            range_km, view_center_lat, view_center_lon
+        )
+        radar_map_image = None
+        radar_map_position = RADAR_RECT.topleft
+        if radar_map_source is not None:
+            radar_map_image = _render_radar_map_view(
+                radar_map_source, radar_map_range, range_km,
+                view_center_lat, view_center_lon,
+            )
         if radar_map_image is not None:
-            if radar_map_image.get_size() != (RADAR_RECT.width, RADAR_RECT.height):
-                radar_map_image = pygame.transform.smoothscale(radar_map_image, (RADAR_RECT.width, RADAR_RECT.height))
-            window.blit(radar_map_image, RADAR_RECT.topleft)
+            window.blit(radar_map_image, radar_map_position)
         else:
             pygame.draw.rect(window, (0, 0, 0), RADAR_RECT)
         
@@ -689,17 +758,12 @@ def _main_impl(max_frames=None):
             label_text = str(round(label_value)) if label_value is not None else '-'
             draw_text.normal(window, label_text, text_font3, (225, 225, 225), int(label_x), int(label_y))
         
-        auto_track_rect = build_auto_track_rect(range_km, view_center_lat, view_center_lon)
+        auto_track_rect = build_auto_track_rect(range_km, view_center_lat, view_center_lon, _config['myLat'])
         if auto_track_rect is not None:
             rect_colour = (0, 255, 0) if tracking_mode_auto else (100, 100, 100)
             pygame.draw.rect(window, rect_colour, auto_track_rect, 1)
 
         #Draw home location marker
-        home_x, home_y = functions.coords_to_xy(
-            _config['myLat'], _config['myLon'], range_km,
-            view_center_lat, view_center_lon, width, height,
-            RADAR_CENTER_X, RADAR_CENTER_Y
-        )
         pygame.draw.polygon(window, (0, 255, 255), [
             (home_x, home_y - 3), 
             (home_x + 3, home_y), 
@@ -710,7 +774,7 @@ def _main_impl(max_frames=None):
         #Draw airports - NOW using view_center instead of config location
         for key in airport_db.airports_uk:
             airport = airport_db.airports_uk[key]
-            x, y = functions.coords_to_xy(airport["lat"], airport["lon"], range_km, view_center_lat, view_center_lon, width, height, RADAR_CENTER_X, RADAR_CENTER_Y)
+            x, y = functions.coords_to_xy(airport["lat"], airport["lon"], range_km, view_center_lat, view_center_lon, width, height, RADAR_CENTER_X, RADAR_CENTER_Y, _config['myLat'])
             pygame.draw.polygon(window, (0, 0, 255), [(x, y - 2), (x + 2, y), (x, y + 2), (x - 2, y)])
             draw_text.center(window, airport["airport_name"], text_font3, (255, 255, 255), x, y - 10)
         
@@ -750,7 +814,7 @@ def _main_impl(max_frames=None):
                 prune_history(heatmap_hits, DIRECTIONAL_HISTORY_SECONDS, current_time)
                 for _, heat_lat, heat_lon in heatmap_hits:
                     try:
-                        heat_x, heat_y = functions.coords_to_xy(float(heat_lat), float(heat_lon), range_km, view_center_lat, view_center_lon, width, height, RADAR_CENTER_X, RADAR_CENTER_Y)
+                        heat_x, heat_y = functions.coords_to_xy(float(heat_lat), float(heat_lon), range_km, view_center_lat, view_center_lon, width, height, RADAR_CENTER_X, RADAR_CENTER_Y, _config['myLat'])
                         if RADAR_RECT.collidepoint(heat_x, heat_y):
                             heatmap_points.append((heat_x, heat_y))
                     except (TypeError, ValueError):
@@ -759,7 +823,7 @@ def _main_impl(max_frames=None):
         if radar_heatmap_enabled:
             draw_radar_heatmap(window, RADAR_RECT, heatmap_points, pygame)
             if radar_map_image is not None:
-                window.blit(radar_map_image, RADAR_RECT.topleft)
+                window.blit(radar_map_image, radar_map_position)
             # Redraw radar rings and labels on top of the heatmap squares.
             window.set_clip(RADAR_RECT)
             pygame.draw.circle(window, (225, 225, 225), (RADAR_CENTER_X, RADAR_CENTER_Y), 100, 1)
@@ -814,7 +878,7 @@ def _main_impl(max_frames=None):
                     continue
 
                 #NOW using view_center instead of config location
-                x, y = functions.coords_to_xy(float(lat), float(lon), range_km, view_center_lat, view_center_lon, width, height, RADAR_CENTER_X, RADAR_CENTER_Y)
+                x, y = functions.coords_to_xy(float(lat), float(lon), range_km, view_center_lat, view_center_lon, width, height, RADAR_CENTER_X, RADAR_CENTER_Y, _config['myLat'])
 
                 #Calculate Heading
                 track = plane.get("track")
@@ -873,7 +937,8 @@ def _main_impl(max_frames=None):
                                 hist_x, hist_y = functions.coords_to_xy(
                                     float(hist_lat), float(hist_lon), range_km,
                                     view_center_lat, view_center_lon,
-                                    width, height, RADAR_CENTER_X, RADAR_CENTER_Y
+                                    width, height, RADAR_CENTER_X, RADAR_CENTER_Y,
+                                    _config['myLat']
                                 )
 
                                 #Only add points that are on or near the screen
@@ -981,8 +1046,6 @@ def _main_impl(max_frames=None):
         #Draw Off button
         pygame.draw.rect(window, (255, 0, 0), off_button_rect)
 
-        pygame.draw.rect(window, (255, 0, 0), clear_graph_rect)
-        
         #right sidebar
         current_time_str = strftime("%H:%M:%S", localtime())
         draw_text.center(window, current_time_str, text_font2, (255, 0, 0), SIDEBAR_X + SIDEBAR_WIDTH // 2, 40)
@@ -1193,16 +1256,16 @@ def _main_impl(max_frames=None):
             distance_unit, distance_unit_rects, draw_text, stat_font, graph_time_font, text_font3, pygame
         )
         filter_button_icons = {
-            'heatmap_on': heatmap_on_icon,
-            'heatmap_off': heatmap_off_icon,
+            'show_trajectories': show_trajectories_icon,
+            'hide_trajectories': hide_trajectories_icon,
             'plane_and_text': plane_and_text_mode_icon,
             'plane_only': plane_only_mode_icon,
             'hide_plane': hide_plane_mode_icon,
             'clear_filters': clear_filters_icon,
         }
         draw_filter_action_buttons(
-            window, heatmap_button_rect, hide_planes_button_rect,
-            reset_filters_button_rect, radar_heatmap_enabled,
+            window, trajectory_toggle_rect, hide_planes_button_rect,
+            reset_filters_button_rect, show_all_trajectories,
             hide_planes_mode, filter_button_icons, pygame
         )
         draw_rarity_filter(
@@ -1213,7 +1276,7 @@ def _main_impl(max_frames=None):
             stat_rect = aircraft_stat_checkbox_rects[option]
             unavailable_online = not offline and not aircraft_stat_availability.get(option, False)
             checkbox_colour = (75, 75, 75) if unavailable_online else (160, 160, 160)
-            label_colour = (90, 90, 90) if unavailable_online else (255, 255, 255)
+            label_colour = (255, 0, 0) if unavailable_online else (255, 255, 255) #small test, revert to (90, 90, 90)
             check_colour = (90, 90, 90) if unavailable_online else (0, 255, 0)
             pygame.draw.rect(window, (20, 20, 20), stat_rect, 0)
             pygame.draw.rect(window, checkbox_colour, stat_rect, 1)
@@ -1356,12 +1419,13 @@ def _main_impl(max_frames=None):
             (mode_toggle_rect, offline_mode_icon if offline else online_mode_icon),
             (auto_track_mode_rect, manual_tracking_icon if tracking_mode_auto else auto_tracking_icon),
             (restart_button_rect, restart_icon),
-            (clear_graph_rect, clear_graph_icon),
+            (clear_graph_rect, selected_plane_icon),
             (off_button_rect, shutdown_icon),
-            (trajectory_toggle_rect, show_trajectories_icon if show_all_trajectories else hide_trajectories_icon),
+            (screenshot_button_rect, screenshot_icon),
         ]
         for rect, icon in toolbar_buttons:
-            pygame.draw.rect(window, (255, 255, 255), rect, 0)
+            button_background = (180, 255, 180) if rect == clear_graph_rect and follow_selected_plane else (255, 255, 255)
+            pygame.draw.rect(window, button_background, rect, 0)
             pygame.draw.rect(window, (100, 100, 100), rect, 1)
             scaled_icon = pygame.transform.smoothscale(icon, (rect.width - 8, rect.height - 8))
             icon_rect = scaled_icon.get_rect(center=rect.center)
@@ -1386,7 +1450,7 @@ def run(mode="preview", stats_uploader=None, _max_frames=None):
     app.tracker_running = True
     if mode == "preview":
         app.offline = True
-        app.window = _create_fullscreen()
+        app.window = _create_window()
         app.initialise_preview_state()
     else:
         app.load_icao_cache()

@@ -243,7 +243,7 @@ def draw_polar_coverage_plot(surface, rect, history, draw_text_module, text_font
 
 
 
-def draw_filter_action_buttons(surface, heatmap_button_rect, hide_planes_button_rect, reset_filters_button_rect, radar_heatmap_enabled, hide_planes_mode, button_icons, *args):
+def draw_filter_action_buttons(surface, trajectory_button_rect, hide_planes_button_rect, reset_filters_button_rect, show_all_trajectories, hide_planes_mode, button_icons, *args):
     pygame_module = None
     for arg in reversed(args):
         if hasattr(arg, 'transform') and hasattr(arg, 'draw'):
@@ -252,7 +252,7 @@ def draw_filter_action_buttons(surface, heatmap_button_rect, hide_planes_button_
     if pygame_module is None:
         import pygame as pygame_module
 
-    heatmap_icon = button_icons['heatmap_off'] if radar_heatmap_enabled else button_icons['heatmap_on']
+    trajectory_icon = button_icons['show_trajectories'] if show_all_trajectories else button_icons['hide_trajectories']
     if hide_planes_mode == 0:
         plane_icon = button_icons['plane_and_text']
     elif hide_planes_mode == 1:
@@ -261,7 +261,7 @@ def draw_filter_action_buttons(surface, heatmap_button_rect, hide_planes_button_
         plane_icon = button_icons['hide_plane']
 
     buttons = [
-        (heatmap_button_rect, heatmap_icon, False),
+        (trajectory_button_rect, trajectory_icon, True),
         (hide_planes_button_rect, plane_icon, True),
         (reset_filters_button_rect, button_icons['clear_filters'], True),
     ]

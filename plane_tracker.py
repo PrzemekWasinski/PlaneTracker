@@ -19,10 +19,12 @@ import os
 import threading
 import math
 import multiprocessing
+
 try:
     import fcntl
-except ImportError:  # Windows development machines do not provide fcntl.
+except ImportError:
     fcntl = None
+    
 import subprocess
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor
@@ -264,7 +266,7 @@ def add_message(message):
 
     with data_lock:
         message_queue.append(formatted_message)
-        if len(message_queue) > 60:
+        if len(message_queue) > 500:
             message_queue.pop(0)
 
 
@@ -717,7 +719,7 @@ def begin_camera_tracking(target_icao, logger=None, auto_select=False):
         raise
 
 
-def build_auto_track_rect(range_km, centre_lat, centre_lon):
+def build_auto_track_rect(range_km, centre_lat, centre_lon, projection_lat=None):
     if not AUTO_TRACK_CONFIGURED:
         return None
 
@@ -734,6 +736,7 @@ def build_auto_track_rect(range_km, centre_lat, centre_lon):
                 height,
                 RADAR_CENTER_X,
                 RADAR_CENTER_Y,
+                projection_lat,
             )
         )
 
