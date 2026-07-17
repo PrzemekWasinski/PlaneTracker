@@ -177,7 +177,6 @@ distance_filter_threshold_km = 0.0
 distance_filter_outside = True
 distance_filter_dragging = False
 rarity_filter_selected = set()
-radar_heatmap_enabled = False
 hide_planes_mode = 0
 show_all_trajectories = False
 AIRCRAFT_STAT_OPTIONS = (
@@ -219,10 +218,10 @@ for _name, _value in tuple(globals().items()):
         setattr(app, _name, _value)
 #THREAD 1: Main UI Thread
 def _main_impl(max_frames=None):
-    global tracker_running, offline, selected_plane_icao, heatmap_hits, window
+    global tracker_running, offline, selected_plane_icao, window
     global altitude_filter_threshold, altitude_filter_above, altitude_filter_dragging
     global distance_filter_threshold_km, distance_filter_outside, distance_filter_dragging
-    global radar_heatmap_enabled, hide_planes_mode, show_all_trajectories, distance_unit, rarity_filter_selected
+    global hide_planes_mode, show_all_trajectories, distance_unit, rarity_filter_selected
     global aircraft_stat_selected
     global tracker_capture_in_progress, tracker_photo_status, tracker_photo_plane_icao, tracking_mode_auto
     global camera_scroll_offset, planecam_auto_capture_last_time
@@ -232,7 +231,6 @@ def _main_impl(max_frames=None):
         top_graph_last_bucket = None
     else:
         top_graph_last_bucket = load_top_graph_history(active_count_history, total_seen_history, TOP_GRAPH_HISTORY_DIR, TOP_GRAPH_HISTORY_SECONDS, start_time)
-        heatmap_hits = deque(load_today_heatmap_hits(FLIGHT_HISTORY_DIR, start_time))
     range_km = 50
     last_health_log = start_time
     last_system_stats_refresh = 0
@@ -487,7 +485,6 @@ def _main_impl(max_frames=None):
                     distance_filter_threshold_km = 0.0
                     distance_filter_outside = True
                     distance_filter_dragging = False
-                    radar_heatmap_enabled = False
                     hide_planes_mode = 0
                     distance_unit = "NM"
                     rarity_filter_selected.clear()
@@ -807,41 +804,6 @@ def _main_impl(max_frames=None):
                     min_dist = dist
                     closest_plane = icao
                 displayed_count += 1
-
-        heatmap_points = []
-        if radar_heatmap_enabled:
-            with data_lock:
-                prune_history(heatmap_hits, DIRECTIONAL_HISTORY_SECONDS, current_time)
-                for _, heat_lat, heat_lon in heatmap_hits:
-                    try:
-                        heat_x, heat_y = functions.coords_to_xy(float(heat_lat), float(heat_lon), range_km, view_center_lat, view_center_lon, width, height, RADAR_CENTER_X, RADAR_CENTER_Y, _config['myLat'])
-                        if RADAR_RECT.collidepoint(heat_x, heat_y):
-                            heatmap_points.append((heat_x, heat_y))
-                    except (TypeError, ValueError):
-                        continue
-
-        if radar_heatmap_enabled:
-            draw_radar_heatmap(window, RADAR_RECT, heatmap_points, pygame)
-            if radar_map_image is not None:
-                window.blit(radar_map_image, radar_map_position)
-            # Redraw radar rings and labels on top of the heatmap squares.
-            window.set_clip(RADAR_RECT)
-            pygame.draw.circle(window, (225, 225, 225), (RADAR_CENTER_X, RADAR_CENTER_Y), 100, 1)
-            pygame.draw.circle(window, (225, 225, 225), (RADAR_CENTER_X, RADAR_CENTER_Y), 200, 1)
-            pygame.draw.circle(window, (225, 225, 225), (RADAR_CENTER_X, RADAR_CENTER_Y), 300, 1)
-            pygame.draw.circle(window, (225, 225, 225), (RADAR_CENTER_X, RADAR_CENTER_Y), 400, 1)
-            pygame.draw.circle(window, (225, 225, 225), (RADAR_CENTER_X, RADAR_CENTER_Y), 500, 1)
-            pygame.draw.circle(window, (225, 225, 225), (RADAR_CENTER_X, RADAR_CENTER_Y), 600, 1)
-
-            range_steps = [100, 200, 300, 400, 500, 600]
-            cos_45 = math.cos(math.radians(45))
-            for radius in range_steps:
-                label_x = RADAR_CENTER_X - (radius * cos_45)
-                label_y = RADAR_CENTER_Y - (radius * cos_45)
-                circle_distance_km = range_km * (radius / 600.0)
-                label_value = convert_distance_from_km(circle_distance_km, distance_unit)
-                label_text = str(round(label_value)) if label_value is not None else '-'
-                draw_text.normal(window, label_text, text_font3, (225, 225, 225), int(label_x), int(label_y))
 
         #Draw radar elements with clipping
         window.set_clip(RADAR_RECT)
@@ -1179,7 +1141,7 @@ def _main_impl(max_frames=None):
         hits_peak = max((sample[1] for sample in hit_samples), default=0)
         hits_y_max = max(10, ((hits_peak + 10 + 9) // 10) * 10)
         selected_total_hits = graph_plane_data.get("total_hit_count", 0) if graph_plane_data else 0
-        draw_line_graph(window, hits_graph_rect, hit_samples, hits_y_max, draw_text, text_font3, pygame, selected_total_hits, current_time, PLANE_GRAPH_HISTORY_SECONDS, "HITS")
+        draw_line_graph(window, hits_graph_rect, hit_samples, hits_y_max, draw_text, text_font3, pygame, selected_total_hits, current_time, PLANE_GRAPH_HISTORY_SECONDS, "HITS P/M")
         
         if p_data:
             mfg = p_data.get('manufacturer', '-')
@@ -1211,14 +1173,14 @@ def _main_impl(max_frames=None):
             spd = p_data.get('speed', '-')
             total_hits = p_data.get("total_hit_count", 0)
 
-            draw_text.normal(window, f"FLIGHT: {flight if flight != '-' else 'N/A'}", stat_font, (255, 255, 255), lx, stat_y)
+            draw_text.normal(window, f"FLNO: {flight if flight != '-' else 'N/A'}", stat_font, (255, 255, 255), lx, stat_y)
             draw_text.normal(window, f"HEX: {target_icao or 'N/A'}", stat_font, (255, 255, 255), rx, stat_y)
 
             draw_text.normal(window, f"ALT: {f'{alt}ft' if alt != '-' else 'N/A'}", stat_font, (255, 255, 255), lx, stat_y + spacing)
             draw_text.normal(window, f"REG: {reg if reg != '-' else 'N/A'}", stat_font, (255, 255, 255), rx, stat_y + spacing)
 
             baro_display = f"{baro_rate:+d}fpm" if baro_rate != '-' else 'N/A'
-            draw_text.normal(window, f"BARO: {baro_display}", stat_font, (255, 255, 255), lx, stat_y + spacing * 2)
+            draw_text.normal(window, f"V/SPD: {baro_display}", stat_font, (255, 255, 255), lx, stat_y + spacing * 2)
             draw_text.normal(window, f"SPD: {f'{rnd(spd)}kt' if spd != '-' else 'N/A'}", stat_font, (255, 255, 255), rx, stat_y + spacing * 2)
 
             draw_text.normal(window, f"HITS: {int(total_hits)}", stat_font, (255, 255, 255), lx, stat_y + spacing * 3)

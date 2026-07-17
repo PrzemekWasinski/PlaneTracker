@@ -60,10 +60,10 @@ _log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message
 log.addHandler(_log_handler)
 
 from modules import draw_text, functions, airport_db
-from modules.data_utils import append_directional_hit, append_sample, clear_top_graph_history, load_today_heatmap_hits, load_top_graph_history, persist_top_graph_sample, prune_history, save_plane_to_csv, save_flight_history
+from modules.data_utils import append_directional_hit, append_sample, clear_top_graph_history, load_top_graph_history, persist_top_graph_sample, prune_history, save_plane_to_csv, save_flight_history
 from modules.network_utils import can_retry_plane_api, check_network, fetch_plane_info
 from modules.rarity import build_model_counts, compute_ratings, get_rarity_colour, get_rarity_rating
-from modules.ui_utils import draw_altitude_filter, draw_filter_action_buttons, draw_line_graph, draw_polar_coverage_plot, draw_radar_heatmap, draw_rarity_filter, plane_matches_altitude_filter, plane_matches_distance_filter
+from modules.ui_utils import draw_altitude_filter, draw_filter_action_buttons, draw_line_graph, draw_polar_coverage_plot, draw_rarity_filter, plane_matches_altitude_filter, plane_matches_distance_filter
 
 def _read_cpu_temp():
     try:
@@ -148,7 +148,6 @@ TRACKER_IMAGE_DIR = Path("images")
 active_count_history = deque()
 total_seen_history = deque()
 directional_hit_history = deque()
-heatmap_hits = deque()
 
 #Activity spectrogram state
 ACTIVITY_SPECTRUM_SECONDS = 120
@@ -842,8 +841,6 @@ def adsb_processing_thread():
                     bearing = functions.calculate_bearing(_config['myLat'], _config['myLon'], plane_data["last_lat"], plane_data["last_lon"])
                     append_directional_hit(directional_hit_history, bearing, PLANE_HIT_SAMPLE_INTERVAL, DIRECTIONAL_SECTOR_COUNT, current_epoch)
                     prune_history(directional_hit_history, DIRECTIONAL_HISTORY_SECONDS, current_epoch)
-                    heatmap_hits.append((current_epoch, plane_data["last_lat"], plane_data["last_lon"]))
-                    prune_history(heatmap_hits, DIRECTIONAL_HISTORY_SECONDS, current_epoch)
                     #Build location_history for ALL planes (not just ones with API data)
                     if plane_data["lat"] != "-" and plane_data["lon"] != "-":
                         plane_data["location_history"][history_timestamp] = [float(plane_data["lat"]), float(plane_data["lon"])]
@@ -1065,7 +1062,7 @@ def flight_stats_refresh_thread():
 
 def initialise_preview_state():
     """Populate a realistic, entirely in-memory dashboard preview."""
-    global active_planes, displayed_planes, heatmap_hits, message_queue
+    global active_planes, displayed_planes, message_queue
     global tracker_status_connected, tracker_device_stats, _flight_stats_cache
     now = time.time()
 
@@ -1132,7 +1129,6 @@ def initialise_preview_state():
     for i in range(24, -1, -1):
         active_count_history.append((now - i * 180, 2 + (i * 3) % 13))
         total_seen_history.append((now - i * 180, 96 + (24 - i) * 3))
-    heatmap_hits = deque((now - i * 90, base_lat + 0.20 * math.sin(i), base_lon + 0.25 * math.cos(i)) for i in range(24))
     tracker_status_connected = True
     tracker_device_stats = {"temp": 46.0, "ram": 38.0, "cpu": 17.0, "disk": 21.4}
     _flight_stats_cache = {
