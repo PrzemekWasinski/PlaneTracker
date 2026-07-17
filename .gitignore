@@ -11,6 +11,7 @@ stats_history/
 #Config files
 /config/config.yml
 firebase.json
+icao_cache.json
 
 #virtual environemnt
 /venv/
@@ -23,3 +24,6 @@ firebase.json
 
 #Firebase data and scripts
 firebase/
+
+#PlaneCam Images
+images/
