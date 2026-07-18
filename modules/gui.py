@@ -46,6 +46,8 @@ offline_mode_icon = pygame.image.load(os.path.join("textures", "icons", "offline
 shutdown_icon = pygame.image.load(os.path.join("textures", "icons", "shutdown.png")).convert_alpha()
 restart_icon = pygame.image.load(os.path.join("textures", "icons", "restart.png")).convert_alpha()
 track_target_icon = pygame.image.load(os.path.join("textures", "icons", "track_target.png")).convert_alpha()
+center_on_home_icon = pygame.image.load(os.path.join("textures", "icons", "center_on_home.png")).convert_alpha()
+center_on_plane_icon = pygame.image.load(os.path.join("textures", "icons", "center_on_plane.png")).convert_alpha()
 auto_tracking_icon = pygame.image.load(os.path.join("textures", "icons", "auto_tracking.png")).convert_alpha()
 manual_tracking_icon = pygame.image.load(os.path.join("textures", "icons", "manual_tracking.png")).convert_alpha()
 plane_only_mode_icon = pygame.image.load(os.path.join("textures", "icons", "plane.png")).convert_alpha()
@@ -1427,12 +1429,15 @@ def _main_impl(max_frames=None):
             (mode_toggle_rect, offline_mode_icon if offline else online_mode_icon),
             (auto_track_mode_rect, manual_tracking_icon if tracking_mode_auto else auto_tracking_icon),
             (restart_button_rect, restart_icon),
-            (clear_graph_rect, selected_plane_icon),
+            (
+                clear_graph_rect,
+                center_on_home_icon if follow_selected_plane else center_on_plane_icon,
+            ),
             (off_button_rect, shutdown_icon),
             (screenshot_button_rect, screenshot_icon),
         ]
         for rect, icon in toolbar_buttons:
-            button_background = (180, 255, 180) if rect == clear_graph_rect and follow_selected_plane else (255, 255, 255)
+            button_background = (255, 255, 255)
             pygame.draw.rect(window, button_background, rect, 0)
             pygame.draw.rect(window, (100, 100, 100), rect, 1)
             scaled_icon = pygame.transform.smoothscale(icon, (rect.width - 8, rect.height - 8))

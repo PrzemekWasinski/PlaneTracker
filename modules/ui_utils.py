@@ -252,7 +252,7 @@ def draw_filter_action_buttons(surface, trajectory_button_rect, hide_planes_butt
     if pygame_module is None:
         import pygame as pygame_module
 
-    trajectory_icon = button_icons['show_trajectories'] if show_all_trajectories else button_icons['hide_trajectories']
+    trajectory_icon = button_icons['hide_trajectories'] if show_all_trajectories else button_icons['show_trajectories']
     if hide_planes_mode == 0:
         plane_icon = button_icons['plane_and_text']
     elif hide_planes_mode == 1:

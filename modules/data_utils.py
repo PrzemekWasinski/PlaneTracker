@@ -133,12 +133,9 @@ _STATS_NUMERIC_COLS = [
 
 def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history', now=None):
     import pandas as pd
-    import glob as _glob
 
     now = now or datetime.now()
-    cutoff = now - timedelta(hours=24)
     today = now.strftime('%Y-%m-%d')
-    yesterday = (now - timedelta(days=1)).strftime('%Y-%m-%d')
 
     default_stats = {
         'total': 0,
@@ -162,20 +159,11 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
         'last_updated': strftime('%H:%M:%S', localtime()),
     }
 
-    rolling_paths = [
-        os.path.join(flight_history_dir, f'{day}.csv')
-        for day in (yesterday, today)
-        if os.path.exists(os.path.join(flight_history_dir, f'{day}.csv'))
-    ]
-    filter_to_rolling_window = bool(rolling_paths)
-    if not rolling_paths:
-        # Preserve the existing fallback for archived/development datasets.
-        all_files = sorted(_glob.glob(os.path.join(flight_history_dir, '????-??-??.csv')))
-        if all_files:
-            rolling_paths = [all_files[-1]]
+    today_path = os.path.join(flight_history_dir, f'{today}.csv')
+    stats_paths = [today_path] if os.path.exists(today_path) else []
 
     try:
-        frames = [pd.read_csv(csv_path, low_memory=False) for csv_path in rolling_paths]
+        frames = [pd.read_csv(csv_path, low_memory=False) for csv_path in stats_paths]
         df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
         # Coerce numeric columns exactly as stats.py does
@@ -187,20 +175,10 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
         for col in ("first_seen", "last_seen"):
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce")
-        if filter_to_rolling_window:
-            recent = pd.Series(False, index=df.index)
-            if "last_seen" in df.columns:
-                recent |= df["last_seen"] >= cutoff
-            if "first_seen" in df.columns:
-                recent |= df["first_seen"] >= cutoff
-            df = df.loc[recent]
-
         # stats_history/stats.csv is updated as soon as API metadata arrives,
         # while the daily flight-history writer intentionally runs in batches.
-        # At startup (especially just after midnight) the daily file may not
-        # exist yet or may contain only incomplete rows. Use the durable
-        # aircraft index as a fallback/enrichment source instead of briefly
-        # publishing an all-zero dashboard.
+        # It may enrich rows from today's file, but must never supply counted
+        # rows itself: the dashboard is strictly today's daily CSV.
         stats_index_path = os.path.join(
             os.path.dirname(os.path.abspath(flight_history_dir)),
             'stats_history',
@@ -214,22 +192,19 @@ def get_stats(home_lat=None, home_lon=None, flight_history_dir='./flight_history
                     'airline': 'owner',
                     'timestamp': 'last_seen',
                 })
-                if 'last_seen' in index_df.columns:
-                    index_df['last_seen'] = pd.to_datetime(index_df['last_seen'], errors='coerce')
-                    index_df = index_df.loc[index_df['last_seen'] >= cutoff]
             except (OSError, ValueError, pd.errors.ParserError, UnicodeDecodeError):
                 index_df = None
 
-        if index_df is not None and not index_df.empty:
-            if df.empty:
-                df = index_df.copy()
-            elif 'icao' in df.columns and 'icao' in index_df.columns:
+        if index_df is not None and not index_df.empty and not df.empty:
+            if 'icao' in df.columns and 'icao' in index_df.columns:
                 lookup = index_df.drop_duplicates('icao', keep='last').set_index('icao')
                 for col in ('manufacturer', 'model', 'owner', 'registration'):
                     if col not in lookup.columns:
                         continue
                     if col not in df.columns:
                         df[col] = pd.NA
+                    else:
+                        df[col] = df[col].astype(object)
                     missing = df[col].isna() | df[col].astype(str).str.strip().isin(('', '-', 'none', 'None'))
                     df.loc[missing, col] = df.loc[missing, 'icao'].map(lookup[col])
 
