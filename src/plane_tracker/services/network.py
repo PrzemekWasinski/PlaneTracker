@@ -5,8 +5,9 @@ from time import localtime, strftime
 
 import requests
 
-from .core_utils import clean_string
 from collections import deque
+
+from ..core.text import clean_string
 
 
 def make_json_safe(value):
@@ -105,4 +106,3 @@ def send_to_tracker(lat, lon, alt_ft, add_message=None, host='192.168.0.157', po
     except Exception as e:
         if add_message:
             add_message(f"Camera module error: {e}")
-

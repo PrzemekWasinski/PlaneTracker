@@ -1,25 +1,25 @@
-#Dispaly
+#Display
 screenWidth: 1920
 screenHeight: 1080
 
-#My Location
+#Receiver location
 myLat: 0.0
 myLon: 0.0
 myAlt: 0.0
 
-#Test target Location
+#PlaneCam test target
 tgtLat: 0.0
 tgtLon: 0.0
 tgtAlt: 0.0
 
-#Settings
-#default mode for pan tilt mount
+#Application settings
+#PlaneCam default mode
 defaultMode: false
 
-#offline mode for plane tracking
+#Offline tracking mode
 offlineMode: false
 
-#where csvs are stored
+#Flight history directory
 flightHistoryDir: ./flight_history
 
 #Local network services
@@ -28,7 +28,7 @@ cameraPort: 12345
 adsbHost: 0.0.0.0
 adsbPort: 30003
 
-#Auto trackikng borders 
+#PlaneCam tracking boundaries
 tlLat: 0.0
 tlLon: 0.0
 

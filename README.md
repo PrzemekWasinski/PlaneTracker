@@ -1,5 +1,3 @@
-# ADS-B Plane Tracker
-
 This is my ADS-B Aircraft Tracker. It works by picking up signals from aircraft and showing their positions on a radar-style display.
 
 Aircraft in flight continuously broadcast information about themselves, including their location. These radio signals use a technology called ADS-B. My system receives these radio signals using a 1090 MHz radio antenna. The signals are then processed by a software called Dump1090, which decodes the radio messages and converts the data into JSON format that can be used by 'plane_tracker.pu`. Once the aircraft’s latitude and longitude are decoded, the system converts these coordinates into X and Y pixel positions. This allows each aircraft to be displayed accurately on the radar screen in its live position.
@@ -12,7 +10,7 @@ https://github.com/user-attachments/assets/47664e26-9741-456e-98a1-10eecfc91036
 
 <img width="1600" height="900" alt="gui" src="https://github.com/user-attachments/assets/451635a0-fd22-4958-afec-cd45e10c19d7" />
 
-This is the GUI, it displays aircraft in their live position which get updated everytime a new ADS-B signal is received for that aircraft, after the aircraft is updated the old position is saved on the radar display creating a historical trajectory over time. A mouse can be used to select different aircraft to view their stats such as their altitude, airline, aircraft type and more, if an aircraft is not selected by the user the program will 
+This is the GUI, it displays aircraft in their live position which get updated everytime a new ADS-B signal is received for that aircraft, after the aircraft is updated the old position is saved on the radar display creating a historical trajectory over time. A mouse can be used to select different aircraft to view their stats such as their altitude, airline, aircraft type and more, if an aircraft is not selected by the user the program will
 display the stats of the nearest aircraft.
 
 The GUI also includes statistics from the past 24 hours, information about the currently slected aircrfat, logs, system performance, a polar plot to inspect the radio coverage, altitude / distance filters and a toolbar.
@@ -27,7 +25,7 @@ The radio antenna receives ADS-B signals on 1090 MHz, which is the standard freq
 
 An RTL-SDR (Realtek Software Defined Radio) is a low-cost USB device that can receive radio signals and pass them to a computer for processing. In this system, it captures the ADS-B signals and allows them to be converted into digital data.
 
-After the signals are decoded, all further processing is handled by `plane_tracker.py`. Currently, the system has a maximum observed range of about 150 nautical miles, which allows me to track aircraft over countries such as France and Belgium while operating from England.
+After the signals are decoded, processing is handled by the `plane_tracker` package. Currently, the system has a maximum observed range of about 150 nautical miles, which allows me to track aircraft over countries such as France and Belgium while operating from England.
 
 # Plane Cam
 
@@ -38,5 +36,6 @@ This system works with [PlaneCam](https://github.com/PrzemekWasinski/PlaneCam) t
 # Tech Stack
     Language: Python
     Radar GUI: Pygame
-    Hardware: Raspberry Pi 4b, RTL-SDR BLOG V4 & 60cm 1090MHz radio antenna
-    
+    Computer: Dell OptiPlex 3050 SFF running Debian 13
+    Receiver: RTL-SDR BLOG V4 & 60cm 1090MHz radio antenna
+

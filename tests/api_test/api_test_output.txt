@@ -1,11 +1,11 @@
-API test — 2026-06-21 15:26:20
+API test — 2026-09-10 12:05:48
 
 ============================================================
 ICAO: 407CB2
 ============================================================
 
 --- hexdb.io ---
-  Status: 200  (156ms)
+  Status: 200  (245ms)
   Response: {
     "ModeS": "407CB2",
     "Registration": "G-RUKF",
@@ -17,7 +17,7 @@ ICAO: 407CB2
 }
 
 --- OpenSky ---
-  Status: 410  (116ms)
+  Status: 410  (215ms)
   Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
 
 ============================================================
@@ -25,7 +25,7 @@ ICAO: 40643B
 ============================================================
 
 --- hexdb.io ---
-  Status: 200  (112ms)
+  Status: 200  (80ms)
   Response: {
     "ModeS": "40643B",
     "Registration": "G-EZTY",
@@ -37,7 +37,7 @@ ICAO: 40643B
 }
 
 --- OpenSky ---
-  Status: 410  (96ms)
+  Status: 410  (140ms)
   Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
 
 ============================================================
@@ -45,7 +45,7 @@ ICAO: 40753C
 ============================================================
 
 --- hexdb.io ---
-  Status: 200  (116ms)
+  Status: 200  (82ms)
   Response: {
     "ModeS": "40753C",
     "Registration": "G-JZBO",
@@ -57,7 +57,7 @@ ICAO: 40753C
 }
 
 --- OpenSky ---
-  Status: 410  (118ms)
+  Status: 410  (136ms)
   Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
 
 ============================================================
@@ -65,7 +65,7 @@ ICAO: AC3C0E
 ============================================================
 
 --- hexdb.io ---
-  Status: 200  (140ms)
+  Status: 200  (84ms)
   Response: {
     "ModeS": "AC3C0E",
     "Registration": "N888FD",
@@ -77,7 +77,7 @@ ICAO: AC3C0E
 }
 
 --- OpenSky ---
-  Status: 410  (108ms)
+  Status: 410  (128ms)
   Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
 
 ============================================================
@@ -85,7 +85,7 @@ ICAO: 40095D
 ============================================================
 
 --- hexdb.io ---
-  Status: 200  (100ms)
+  Status: 200  (76ms)
   Response: {
     "ModeS": "40095D",
     "Registration": "G-TTOB",
@@ -97,7 +97,7 @@ ICAO: 40095D
 }
 
 --- OpenSky ---
-  Status: 410  (118ms)
+  Status: 410  (132ms)
   Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
 
 ============================================================
@@ -105,11 +105,11 @@ ICAO: 4CAE8D
 ============================================================
 
 --- hexdb.io ---
-  Status: 404  (346ms)
+  Status: 404  (83ms)
   Response: "{\"status\":\"404\",\"error\":\"Aircraft not found.\"}"
 
 --- OpenSky ---
-  Status: 410  (153ms)
+  Status: 410  (132ms)
   Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
 
 ============================================================
@@ -117,7 +117,7 @@ ICAO: 06A13A
 ============================================================
 
 --- hexdb.io ---
-  Status: 200  (106ms)
+  Status: 200  (82ms)
   Response: {
     "ModeS": "06A13A",
     "Registration": "A7-BAX",
@@ -129,7 +129,7 @@ ICAO: 06A13A
 }
 
 --- OpenSky ---
-  Status: 410  (126ms)
+  Status: 410  (134ms)
   Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
 
 ============================================================
@@ -137,7 +137,7 @@ ICAO: AAA6E4
 ============================================================
 
 --- hexdb.io ---
-  Status: 200  (109ms)
+  Status: 200  (70ms)
   Response: {
     "ModeS": "AAA6E4",
     "Registration": "N786AV",
@@ -149,5 +149,5 @@ ICAO: AAA6E4
 }
 
 --- OpenSky ---
-  Status: 410  (112ms)
+  Status: 410  (205ms)
   Response: "<html>\r\n<head><title>410 Gone</title></head>\r\n<body>\r\n<center><h1>410 Gone</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"

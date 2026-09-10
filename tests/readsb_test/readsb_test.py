@@ -40,12 +40,12 @@ def main():
 
         aircraft = data.get("aircraft", [])
 
-        # ── Test 1: top-level keys in the JSON ────────────────────────────────
+
         def t1():
             return f"Top-level keys: {list(data.keys())}\nAircraft count: {len(aircraft)}"
         run("Top-level JSON structure", t1, f)
 
-        # ── Test 2: all keys that appear across every aircraft entry ──────────
+
         def t2():
             all_keys = set()
             for a in aircraft:
@@ -53,7 +53,7 @@ def main():
             return "All keys seen across all aircraft:\n  " + "\n  ".join(sorted(all_keys))
         run("All aircraft keys", t2, f)
 
-        # ── Test 3: flight / callsign field presence per aircraft ─────────────
+
         def t3():
             lines = []
             for a in aircraft:
@@ -64,7 +64,7 @@ def main():
             return "\n".join(lines) if lines else "No aircraft in feed."
         run("flight / callsign field per aircraft", t3, f)
 
-        # ── Test 4: raw dump of first 5 aircraft ──────────────────────────────
+
         def t4():
             out = []
             for a in aircraft[:5]:
@@ -73,7 +73,7 @@ def main():
             return "\n".join(out) if out else "No aircraft in feed."
         run("Raw dump of first 5 aircraft", t4, f)
 
-        # ── Test 5: aircraft that have a non-empty flight field ───────────────
+
         def t5():
             with_flight = [a for a in aircraft if a.get("flight", "").strip()]
             lines = [f"  {a['hex']:8s}  flight={repr(a['flight'])}" for a in with_flight]

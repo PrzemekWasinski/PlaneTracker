@@ -1,25 +1,29 @@
-#Useless
+#Operating system files
 .DS_Store
 __pycache__
+.pytest_cache/
 /py_cache
 .vscode
 
-#.csv flight history
+#Flight history files
 stats_history/
 2*.csv*
 
-#Config files
+#Configuration files
 config/config.yml
 firebase.json
 
-#Cache
+#Cache files
 icao_cache.json
 
-#virtual environemnt
+#Virtual environments
 venv/
 
-#GUI elements
+#GUI assets
 textures/
 
 #Log files
 *.log
+
+#TODO
+TODO.md

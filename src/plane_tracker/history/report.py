@@ -1,4 +1,4 @@
-#  Options: "daily" | "weekly" | "monthly" | "all_time"
+
 MODE = "daily"
 
 import os
@@ -8,8 +8,10 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.widgets import Button
 from datetime import date, timedelta
+from pathlib import Path
 
-HISTORY_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+HISTORY_DIR = str(PROJECT_ROOT / "flight_history")
 BG = "#111318"
 PANEL_BG = "#1B1F27"
 TEXT = "#E8EAF0"
@@ -31,7 +33,7 @@ CATEGORY_LABELS = {
 }
 
 
-#Data loading
+
 
 def csv_path(d: date) -> str:
     return os.path.join(HISTORY_DIR, f"{d}.csv")
@@ -70,29 +72,29 @@ def load_data(files: list[str]) -> pd.DataFrame:
         raise FileNotFoundError("No valid CSV data found.")
     df = pd.concat(parts, ignore_index=True)
 
-    # Coerce numeric columns — raw data uses '-' for missing
+
     for col in NUMERIC_COLS:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col].replace("-", pd.NA), errors="coerce")
 
-    # Parse timestamps
+
     for col in ("first_seen", "last_seen"):
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce")
 
-    # Clean string columns
+
     for col in ("owner", "manufacturer", "model", "category", "emergency", "registration"):
         if col in df.columns:
             df[col] = df[col].replace(["-", "none", "None", ""], pd.NA)
 
-    # Deduplicate across days
+
     if "icao" in df.columns and "first_seen" in df.columns:
         df = df.drop_duplicates(subset=["icao", "first_seen"])
 
     return df
 
 
-#Plot helpers
+
 
 def _style(ax):
     ax.set_facecolor(PANEL_BG)
@@ -331,7 +333,7 @@ def plot_summary(ax, df: pd.DataFrame, mode: str, files_count: int):
     ax.set_title("Summary", fontweight="bold", pad=6, fontsize=9)
 
 
-#Main 
+
 
 def main():
     print(f"[stats] Mode: {MODE}")

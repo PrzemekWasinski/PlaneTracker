@@ -1,16 +1,15 @@
-from .core_utils import (
+from .core.config import load_config, save_config
+from .core.geometry import (
     calculate_bearing,
     calculate_distance,
     calculate_heading,
-    clean_string,
     coords_to_xy,
-    get_disk_free,
-    load_config,
-    restart_script,
-    save_config,
 )
-from .data_utils import get_stats, parse_aircraft
-from .network_utils import connect
+from .core.system import get_disk_free, restart_script
+from .core.text import clean_string
+from .adsb.parser import parse_aircraft
+from .history.statistics import get_stats
+from .services.network import connect
 
 __all__ = [
     'calculate_bearing',

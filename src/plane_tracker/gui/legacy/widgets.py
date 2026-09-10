@@ -1,7 +1,7 @@
 import math
 import time
 
-from .data_utils import aggregate_directional_hits
+from ...history.samples import aggregate_directional_hits
 
 
 def plane_matches_altitude_filter(plane_data, altitude_filter_threshold, altitude_filter_above):

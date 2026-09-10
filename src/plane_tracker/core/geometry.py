@@ -1,47 +1,4 @@
 import math
-import multiprocessing
-import os
-import re
-import shutil
-import sys
-import time
-
-import yaml
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, '..', 'config', 'config.yml')
-
-
-def load_config():
-    if not os.path.exists(CONFIG_PATH):
-        print(f"{CONFIG_PATH} not found creating default config")
-        with open(CONFIG_PATH, 'w') as f:
-            yaml.dump({}, f)
-    try:
-        with open(CONFIG_PATH, 'r') as f:
-            return yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        print(f"Error parsing config.yml: {e}")
-        sys.exit(1)
-
-
-def save_config(config):
-    try:
-        with open(CONFIG_PATH, 'w') as f:
-            yaml.dump(config, f, default_flow_style=False)
-        return True
-    except Exception as e:
-        print(f"Error saving config.yml: {e}")
-        return False
-
-
-def restart_script():
-    print("Restarting script")
-    for child in multiprocessing.active_children():
-        child.terminate()
-        child.join(timeout=2)
-    time.sleep(0.25)
-    os.execv(sys.executable, [sys.executable, *sys.argv])
 
 
 def coords_to_xy(lat, lon, range_km, centre_lat, centre_lon, screen_width, screen_height, center_x=None, center_y=None, projection_lat=None):
@@ -60,14 +17,6 @@ def coords_to_xy(lat, lon, range_km, centre_lat, centre_lon, screen_width, scree
     x = center_x + int(dx / km_per_px)
     y = center_y - int(dy / km_per_px)
     return x, y
-
-
-def get_disk_free():
-    try:
-        total, used, free = shutil.disk_usage('/')
-        return round(free / (2**30), 1)
-    except Exception:
-        return 0.0
 
 
 def calculate_distance(lat1, lon1, lat2, lon2):
@@ -99,7 +48,3 @@ def calculate_bearing(lat1, lon1, lat2, lon2):
     y = math.sin(delta_lon_rad) * math.cos(lat2_rad)
     x = math.cos(lat1_rad) * math.sin(lat2_rad) - math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(delta_lon_rad)
     return (math.degrees(math.atan2(y, x)) + 360) % 360
-
-
-def clean_string(string):
-    return re.sub(r"[\/\\.,:]", " ", string)

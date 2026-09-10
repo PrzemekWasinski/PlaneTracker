@@ -6,7 +6,7 @@ from datetime import datetime
 
 OUTPUT_FILE = os.path.join(os.path.dirname(__file__), 'api_test_output.txt')
 
-# ICAOs from the readsb test output
+
 TEST_ICAOS = ['407cb2', '40643b', '40753c', 'ac3c0e', '40095d', '4cae8d', '06a13a', 'aaa6e4']
 
 

@@ -3,7 +3,7 @@ import math
 from pathlib import Path
 
 try:
-    import shapefile  # pyshp
+    import shapefile
 except ImportError as exc:
     raise SystemExit('Missing dependency: pyshp. Install with: pip install pyshp pillow pyyaml') from exc
 
