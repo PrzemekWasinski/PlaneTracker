@@ -27,12 +27,6 @@ An RTL-SDR (Realtek Software Defined Radio) is a low-cost USB device that can re
 
 After the signals are decoded, processing is handled by the `plane_tracker` package. Currently, the system has a maximum observed range of about 150 nautical miles, which allows me to track aircraft over countries such as France and Belgium while operating from England.
 
-# Plane Cam
-
-<img width="4032" height="3024" alt="20260405_104031" src="https://github.com/user-attachments/assets/1543526a-0ff3-4f91-9622-76ae15331a22" />
-
-This system works with [PlaneCam](https://github.com/PrzemekWasinski/PlaneCam) to optically track the aircraft that are picked up by the radio antenna. This is doen by converting an aircraft's latitude and longitude into servo motor angles, taking an image when the servo motors are locked onto the aircraft and sending it back over the local network.
-
 # Tech Stack
     Language: Python
     Radar GUI: Pygame

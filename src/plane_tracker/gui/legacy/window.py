@@ -42,11 +42,8 @@ online_mode_icon = pygame.image.load(os.path.join("textures", "icons", "online_m
 offline_mode_icon = pygame.image.load(os.path.join("textures", "icons", "offline_mode.png")).convert_alpha()
 shutdown_icon = pygame.image.load(os.path.join("textures", "icons", "shutdown.png")).convert_alpha()
 restart_icon = pygame.image.load(os.path.join("textures", "icons", "restart.png")).convert_alpha()
-track_target_icon = pygame.image.load(os.path.join("textures", "icons", "track_target.png")).convert_alpha()
 center_on_home_icon = pygame.image.load(os.path.join("textures", "icons", "center_on_home.png")).convert_alpha()
 center_on_plane_icon = pygame.image.load(os.path.join("textures", "icons", "center_on_plane.png")).convert_alpha()
-auto_tracking_icon = pygame.image.load(os.path.join("textures", "icons", "auto_tracking.png")).convert_alpha()
-manual_tracking_icon = pygame.image.load(os.path.join("textures", "icons", "manual_tracking.png")).convert_alpha()
 plane_only_mode_icon = pygame.image.load(os.path.join("textures", "icons", "plane.png")).convert_alpha()
 plane_and_text_mode_icon = pygame.image.load(os.path.join("textures", "icons", "plane_and_text.png")).convert_alpha()
 hide_plane_mode_icon = pygame.image.load(os.path.join("textures", "icons", "hide_plane.png")).convert_alpha()
@@ -146,10 +143,9 @@ SIDEBAR_WIDTH = width - SIDEBAR_X
 
 btn_w = 40
 btn_h = 40
-btn_gap = 12
 toolbar_start_x = SIDEBAR_X + 5
 toolbar_width = int((SIDEBAR_WIDTH / 2) - 10)
-toolbar_button_count = 8
+toolbar_button_count = 7
 
 
 def toolbar_button_x(index):
@@ -160,11 +156,10 @@ def toolbar_button_x(index):
 zoom_in_ctrl_rect = pygame.Rect(toolbar_button_x(0), height - 50, btn_w, btn_h)
 zoom_out_ctrl_rect = pygame.Rect(toolbar_button_x(1), height - 50, btn_w, btn_h)
 mode_toggle_rect = pygame.Rect(toolbar_button_x(2), height - 50, btn_w, btn_h)
-auto_track_mode_rect = pygame.Rect(toolbar_button_x(3), height - 50, btn_w, btn_h)
-restart_button_rect = pygame.Rect(toolbar_button_x(4), height - 50, btn_w, btn_h)
-off_button_rect = pygame.Rect(toolbar_button_x(5), height - 50, btn_w, btn_h)
-clear_graph_rect = pygame.Rect(toolbar_button_x(6), height - 50, btn_w, btn_h)
-screenshot_button_rect = pygame.Rect(toolbar_button_x(7), height - 50, btn_w, btn_h)
+restart_button_rect = pygame.Rect(toolbar_button_x(3), height - 50, btn_w, btn_h)
+off_button_rect = pygame.Rect(toolbar_button_x(4), height - 50, btn_w, btn_h)
+clear_graph_rect = pygame.Rect(toolbar_button_x(5), height - 50, btn_w, btn_h)
+screenshot_button_rect = pygame.Rect(toolbar_button_x(6), height - 50, btn_w, btn_h)
 
 
 selected_plane_icao = None
@@ -185,28 +180,6 @@ AIRCRAFT_STAT_OPTIONS = (
 DEFAULT_AIRCRAFT_STATS = {"Airline", "Aircraft", "FlightNumber", "Altitude"}
 aircraft_stat_selected = set(DEFAULT_AIRCRAFT_STATS)
 distance_unit = "NM"
-tracker_status_connected = False
-tracker_device_stats = {"temp": None, "ram": None, "cpu": None, "disk": None}
-tracker_capture_in_progress = False
-tracker_photo_bytes = None
-tracker_photo_surface = None
-tracker_photo_dirty = False
-tracker_photo_status = "No camera image"
-tracker_photo_plane_icao = None
-tracker_pending_photo_plane_icao = None
-tracker_photo_meta = {}
-tracker_plane_photo_cache = {}
-tracker_plane_photo_meta_cache = {}
-tracking_mode_auto = False
-planecam_auto_capture_last_time = {}
-PLANECAM_AUTO_CAPTURE_INTERVAL = 15.0
-tracker_plane_photo_history = {}
-TRACKER_PLANE_PHOTO_HISTORY_LIMIT = 10
-camera_scroll_offset = 0
-auto_track_queue = deque()
-auto_track_inside_icaos = set()
-AUTO_TRACK_POLYGON_KEYS = (("tlLat", "tlLon"), ("trLat", "trLon"), ("brLat", "brLon"), ("blLat", "blLon"))
-AUTO_TRACK_CONFIGURED = all(_config.get(lat_key) is not None and _config.get(lon_key) is not None for lat_key, lon_key in AUTO_TRACK_POLYGON_KEYS)
 instance_lock_file = None
 
 
@@ -222,8 +195,6 @@ def _main_impl(max_frames=None):
     global distance_filter_threshold_km, distance_filter_outside, distance_filter_dragging
     global hide_planes_mode, show_all_trajectories, distance_unit, rarity_filter_selected
     global aircraft_stat_selected
-    global tracker_capture_in_progress, tracker_photo_status, tracker_photo_plane_icao, tracking_mode_auto
-    global camera_scroll_offset, planecam_auto_capture_last_time
     global start_time, top_graph_last_bucket, range_km
     global last_health_log, last_system_stats_refresh
     global cpu_temp, ram_percentage, cpu_percentage, disk_free
@@ -231,7 +202,7 @@ def _main_impl(max_frames=None):
     global follow_selected_plane, plane_headings, log_scroll_offset
     global log_scroll_dragging, log_scrollbar_thumb_rect
     global log_scroll_drag_start_y, log_scroll_drag_start_offset
-    global _prev_target_icao_for_scroll, closest_plane, frames_rendered
+    global closest_plane, frames_rendered
     global _compact_stat_number, _aircraft_stat_display
     global _aircraft_stat_available, _active_plane_position, _closest_active_plane
 
@@ -259,7 +230,6 @@ def _main_impl(max_frames=None):
     log_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
     log_scroll_drag_start_y = 0
     log_scroll_drag_start_offset = 0
-    _prev_target_icao_for_scroll = None
     closest_plane = None
     frames_rendered = 0
 

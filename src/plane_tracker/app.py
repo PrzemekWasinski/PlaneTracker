@@ -1,9 +1,7 @@
 import json
 from pathlib import Path
 import sys
-import socket
 import time
-import io
 import logging
 import logging.handlers
 from datetime import datetime
@@ -21,7 +19,6 @@ try:
 except ImportError:
     fcntl = None
 
-import subprocess
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor
 
@@ -61,7 +58,7 @@ from .gui import preview_data
 from .history.csv_storage import save_flight_history, save_plane_to_csv
 from .history import runtime as history_runtime
 from .history.samples import append_directional_hit, append_sample, clear_top_graph_history, load_top_graph_history, persist_top_graph_sample, prune_history
-from .services import planecam
+from .services import aircraft_api
 from .services.network import can_retry_plane_api, check_network, fetch_plane_info
 from . import orchestration
 
@@ -99,8 +96,6 @@ RARITY_TIERS = [
 _config = functions.load_config()
 _config.setdefault('screenWidth', 1920)
 _config.setdefault('screenHeight', 1080)
-_config.setdefault('cameraHost', '192.168.0.157')
-_config.setdefault('cameraPort', 12345)
 _config.setdefault('flightHistoryDir', './flight_history')
 _config.setdefault('offlineMode', False)
 _config.setdefault('myLat', 0.0)
@@ -110,7 +105,6 @@ FLIGHT_HISTORY_DIR = _config['flightHistoryDir']
 model_counts = build_model_counts(FLIGHT_HISTORY_DIR)
 model_ratings = compute_ratings(model_counts)
 
-CAMERA_SERVER = (_config['cameraHost'], int(_config['cameraPort']))
 READSB_JSON_PATH = "/run/readsb/aircraft.json"
 
 
@@ -128,14 +122,9 @@ fade_duration = 10
 
 PLANE_API_RETRY_DELAY = 60
 ACTIVE_PLANE_RETENTION_SECONDS = 30 * 60
-TRACKER_PHOTO_CACHE_LIMIT = 24
-TRACKER_PREDICTION_SECONDS = 1.2
-TRACKER_MAX_EXTRAPOLATION_SECONDS = 2.0
-TRACKER_MAX_SAMPLE_AGE_SECONDS = 5.0
 
 
 data_lock = threading.Lock()
-tracker_request_lock = threading.Lock()
 
 
 TOP_GRAPH_HISTORY_SECONDS = 24 * 60 * 60
@@ -146,7 +135,6 @@ PLANE_HIT_SAMPLE_INTERVAL = 60
 DIRECTIONAL_HISTORY_SECONDS = 24 * 60 * 60
 DIRECTIONAL_SECTOR_COUNT = 8
 TOP_GRAPH_HISTORY_DIR = "stats_history"
-TRACKER_IMAGE_DIR = Path("images")
 
 active_count_history = deque()
 total_seen_history = deque()
@@ -159,19 +147,6 @@ activity_spectrum_rows = deque()
 activity_messages_this_second = 0
 activity_last_flush = time.time()
 
-
-def format_service_connection_error(service_name, endpoint, error):
-    host, port = endpoint
-    error_text = str(error)
-    lowered_error = error_text.lower()
-
-    if isinstance(error, ConnectionRefusedError) or 'refused' in lowered_error:
-        return (
-            f"{service_name} unavailable: connection refused at {host}:{port}. "
-            f"Start the {service_name.lower()} service or update config/config.yml."
-        )
-
-    return f"{service_name} unavailable at {host}:{port}: {error_text}"
 
 ICAO_CACHE_PATH = './config/icao_cache.json'
 ICAO_CACHE_MAX_AGE_DAYS = 30
@@ -309,5 +284,5 @@ def snapshot_displayed_planes():
         }
 
 
-for _module in (planecam, processor, history_runtime, preview_data, orchestration):
+for _module in (aircraft_api, processor, history_runtime, preview_data, orchestration):
     bind_module(globals(), _module)

@@ -18,14 +18,6 @@ def draw_sidebar():
         sys_y = 85
         col1 = SIDEBAR_X + 10
         col2 = SIDEBAR_X + SIDEBAR_WIDTH // 2 - 250
-        with data_lock:
-            tracker_stats_snapshot = dict(tracker_device_stats)
-
-        tracker_temp_text = f"TEMP:{round(tracker_stats_snapshot['temp'])}C" if tracker_stats_snapshot['temp'] is not None else "TEMP: N/A"
-        tracker_ram_text = f"RAM:{round(tracker_stats_snapshot['ram'])}%" if tracker_stats_snapshot['ram'] is not None else "RAM: N/A"
-        tracker_cpu_text = f"CPU:{round(tracker_stats_snapshot['cpu'])}%" if tracker_stats_snapshot['cpu'] is not None else "CPU: N/A"
-        tracker_disk_text = f"DISK:{round(tracker_stats_snapshot['disk'], 1)}GB" if tracker_stats_snapshot['disk'] is not None else "DISK: N/A"
-
         api_status_connected = (not offline) and network_available and any(
             display_data.get("plane_data", {}).get('manufacturer', '-') != '-'
             for display_data in displayed_planes_snapshot.values()
@@ -34,7 +26,6 @@ def draw_sidebar():
 
         api_status_colour = (0, 255, 0) if api_status_connected else (255, 0, 0)
         internet_status_colour = (0, 255, 0) if internet_status_connected else (255, 0, 0)
-        tracker_status_colour = (0, 255, 0) if tracker_status_connected else (255, 0, 0)
 
 
 
@@ -113,13 +104,6 @@ def draw_sidebar():
 
         altitude_graph_rect = pygame.Rect(SIDEBAR_X + 300, separator_y + 10, 240, 130)
         hits_graph_rect = pygame.Rect(SIDEBAR_X + 580, separator_y + 10, 240, 130)
-
-
-        track_button_colour = (120, 120, 120) if (tracking_mode_auto or tracker_capture_in_progress) else (255, 255, 255)
-        pygame.draw.rect(window, track_button_colour, track_plane_button_rect, 0)
-        pygame.draw.rect(window, (100, 100, 100), track_plane_button_rect, 1)
-        scaled_track_target_icon = pygame.transform.smoothscale(track_target_icon, (32, 32))
-        window.blit(scaled_track_target_icon, scaled_track_target_icon.get_rect(center=track_plane_button_rect.center))
 
 
         target_icao = selected_plane_icao if (selected_plane_icao in displayed_planes_snapshot) else closest_plane
@@ -270,19 +254,12 @@ def draw_sidebar():
         draw_text.normal(window, f"RAM:{ram_percentage}%", stat_font, (255, 255, 255), sx, sy + sp * 2)
         draw_text.normal(window, f"CPU:{cpu_percentage}%", stat_font, (255, 255, 255), sx, sy + sp * 3)
         draw_text.normal(window, f"DISK:{disk_free}GB", stat_font, (255, 255, 255), sx, sy + sp * 4)
-        draw_text.normal(window, "Camera:", stat_font, (255, 255, 255), sx, sy + sp * 5 + 5)
-        draw_text.normal(window, tracker_temp_text, stat_font, (255, 255, 255), sx, sy + sp * 6 + 5)
-        draw_text.normal(window, tracker_ram_text, stat_font, (255, 255, 255), sx, sy + sp * 7 + 5)
-        draw_text.normal(window, tracker_cpu_text, stat_font, (255, 255, 255), sx, sy + sp * 8 + 5)
-        draw_text.normal(window, tracker_disk_text, stat_font, (255, 255, 255), sx, sy + sp * 9 + 5)
 
-        dot_y = sy + sp * 10 + 10
+        dot_y = sy + sp * 5 + 10
         pygame.draw.circle(window, api_status_colour, (sx + 5, dot_y + 9), 5)
         draw_text.normal(window, "API", stat_font, (255, 255, 255), sx + 14, dot_y)
         pygame.draw.circle(window, internet_status_colour, (sx + 5, dot_y + sp + 9), 5)
         draw_text.normal(window, "Internet", stat_font, (255, 255, 255), sx + 14, dot_y + sp)
-        pygame.draw.circle(window, tracker_status_colour, (sx + 5, dot_y + sp * 2 + 9), 5)
-        draw_text.normal(window, "Camera", stat_font, (255, 255, 255), sx + 14, dot_y + sp * 2)
 
         _LOG_SCROLLBAR_W = 6
         log_scrollbar_track_rect = pygame.Rect(filter_panel_rect.right - _LOG_SCROLLBAR_W - 1, bottom_row_y + 1, _LOG_SCROLLBAR_W, log_h - 2)
@@ -319,69 +296,10 @@ def draw_sidebar():
             log_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
 
 
-        cam_w = int((SIDEBAR_WIDTH / 2) - 10)
-        cam_h = int(cam_w * 3 / 4)
-        cam_rect = pygame.Rect(SIDEBAR_X + 5, bottom_row_y, cam_w, cam_h)
-        pygame.draw.rect(window, (20, 20, 20), cam_rect, 0)
-        pygame.draw.rect(window, (100, 100, 100), cam_rect, 1)
-
-        with data_lock:
-            camera_busy = tracker_capture_in_progress
-            camera_connected = tracker_status_connected
-            _latest_cam_surface = tracker_photo_surface
-            _latest_cam_meta = dict(tracker_photo_meta)
-
-        _scroll_display_icao = selected_plane_icao if selected_plane_icao else closest_plane
-        _photo_history = tracker_plane_photo_history.get(_scroll_display_icao, []) if _scroll_display_icao else []
-        if _photo_history:
-            _display_idx = min(camera_scroll_offset, len(_photo_history) - 1)
-            camera_photo_surface, cam_meta = _photo_history[_display_idx]
-        else:
-            camera_photo_surface = None if _scroll_display_icao else _latest_cam_surface
-            cam_meta = _latest_cam_meta
-
-        if camera_photo_surface is not None:
-            img_w, img_h = camera_photo_surface.get_size()
-            if img_w > 0 and img_h > 0:
-                scale = min(cam_rect.width / img_w, cam_rect.height / img_h)
-                scaled_size = (max(1, int(img_w * scale)), max(1, int(img_h * scale)))
-                scaled_surface = pygame.transform.smoothscale(camera_photo_surface, scaled_size)
-                window.blit(scaled_surface, scaled_surface.get_rect(center=cam_rect.center))
-        else:
-            placeholder = 'CAMERA BUSY' if camera_busy else 'NO IMAGE'
-            draw_text.center(window, placeholder, text_font1, (100, 100, 100), cam_rect.centerx, cam_rect.centery)
-
-
-        for _scroll_rect, _arrow_dir in [(cam_scroll_left_rect, 'L'), (cam_scroll_right_rect, 'R')]:
-            pygame.draw.rect(window, (255, 255, 255), _scroll_rect, 0)
-            pygame.draw.rect(window, (100, 100, 100), _scroll_rect, 1)
-            _cx, _cy = _scroll_rect.centerx, _scroll_rect.centery
-            if _arrow_dir == 'L':
-                pygame.draw.polygon(window, (0, 0, 0), [(_cx + 8, _cy - 8), (_cx - 8, _cy), (_cx + 8, _cy + 8)])
-            else:
-                pygame.draw.polygon(window, (0, 0, 0), [(_cx - 8, _cy - 8), (_cx + 8, _cy), (_cx - 8, _cy + 8)])
-
-        if _photo_history:
-            _total_photos = len(_photo_history)
-            _shown_idx = min(camera_scroll_offset, _total_photos - 1)
-            draw_text.right(window, f"{_shown_idx + 1}/{_total_photos}", stat_font, (200, 200, 200), cam_scroll_right_rect.right, cam_scroll_right_rect.bottom + 5)
-
-        cam_status = 'BUSY' if camera_busy else ('CONNECTED' if camera_connected else 'OFFLINE')
-        cam_pan = cam_meta.get('pan', '-')
-        cam_tilt = cam_meta.get('tilt', '-')
-        cam_sx = cam_rect.left
-        cam_sy = cam_rect.bottom + 10
-        cam_sp = 15
-        draw_text.normal(window, f"STATUS: {cam_status}", stat_font, (200, 200, 200), cam_sx, cam_sy)
-        draw_text.normal(window, f"PAN: {cam_pan}", stat_font, (200, 200, 200), cam_sx, cam_sy + cam_sp)
-        draw_text.normal(window, f"TILT: {cam_tilt}", stat_font, (200, 200, 200), cam_sx, cam_sy + cam_sp * 2)
-
-
         toolbar_buttons = [
             (zoom_in_ctrl_rect, zoom_in_icon),
             (zoom_out_ctrl_rect, zoom_out_icon),
             (mode_toggle_rect, offline_mode_icon if offline else online_mode_icon),
-            (auto_track_mode_rect, manual_tracking_icon if tracking_mode_auto else auto_tracking_icon),
             (restart_button_rect, restart_icon),
             (
                 clear_graph_rect,

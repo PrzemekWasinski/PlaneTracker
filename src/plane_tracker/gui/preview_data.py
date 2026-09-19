@@ -1,7 +1,7 @@
 def initialise_preview_state():
 
     global active_planes, displayed_planes, message_queue
-    global tracker_status_connected, tracker_device_stats, _flight_stats_cache
+    global _flight_stats_cache
     now = time.time()
 
     base_lat = float(_config['myLat'])
@@ -37,7 +37,7 @@ def initialise_preview_state():
             "lat": base_lat + lat_delta, "lon": base_lon + lon_delta,
             "last_lat": base_lat + lat_delta, "last_lon": base_lon + lon_delta,
             "prev_lat": base_lat + lat_delta * 0.98, "prev_lon": base_lon + lon_delta * 0.98,
-            "prev_update_time": now - 5, "last_update_time": now,
+            "last_update_time": now,
             "altitude": str(altitude), "speed": str(speed), "track": str(track),
             "vertical_rate": str((index - 1) * 320), "squawk": "7000",
             "manufacturer": manufacturer, "model": model,
@@ -67,8 +67,6 @@ def initialise_preview_state():
     for i in range(24, -1, -1):
         active_count_history.append((now - i * 180, 2 + (i * 3) % 13))
         total_seen_history.append((now - i * 180, 96 + (24 - i) * 3))
-    tracker_status_connected = True
-    tracker_device_stats = {"temp": 46.0, "ram": 38.0, "cpu": 17.0, "disk": 21.4}
     _flight_stats_cache = {
         'total': 168, 'top_model': {'name': 'A320', 'count': 31},
         'top_manufacturer': {'name': 'Airbus', 'count': 72},

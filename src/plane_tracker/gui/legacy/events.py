@@ -1,12 +1,12 @@
 def handle_events():
         global aircraft_stat_selected, altitude_filter_above, altitude_filter_dragging
-        global altitude_filter_threshold, camera_scroll_offset
+        global altitude_filter_threshold
         global distance_filter_dragging, distance_filter_outside
         global distance_filter_threshold_km, distance_unit, follow_selected_plane
         global hide_planes_mode, log_scroll_drag_start_offset, log_scroll_drag_start_y
         global log_scroll_dragging, log_scroll_offset, offline, range_km
         global selected_plane_icao, show_all_trajectories, tracker_running
-        global tracking_mode_auto, view_center_lat, view_center_lon, window
+        global view_center_lat, view_center_lon, window
 
 
         for event in pygame.event.get():
@@ -180,58 +180,7 @@ def handle_events():
                     distance_filter_threshold_km = clamp_distance_threshold((1.0 - ((clamped_y - distance_slider_track_rect.top) / max(1, distance_slider_track_rect.height))) * 1000.0)
                     continue
 
-                if cam_scroll_left_rect.collidepoint(mouse_x, mouse_y):
-                    _scroll_icao = selected_plane_icao if selected_plane_icao else closest_plane
-                    _hist_len = len(tracker_plane_photo_history.get(_scroll_icao, [])) if _scroll_icao else 0
-                    if _hist_len > 0:
-                        camera_scroll_offset = (camera_scroll_offset - 1) % _hist_len
-                    continue
-
-                if cam_scroll_right_rect.collidepoint(mouse_x, mouse_y):
-                    _scroll_icao = selected_plane_icao if selected_plane_icao else closest_plane
-                    _hist_len = len(tracker_plane_photo_history.get(_scroll_icao, [])) if _scroll_icao else 0
-                    if _hist_len > 0:
-                        camera_scroll_offset = (camera_scroll_offset + 1) % _hist_len
-                    continue
-
-                if track_plane_button_rect.collidepoint(mouse_x, mouse_y):
-                    if tracking_mode_auto:
-                        add_message('Manual tracking disabled in auto mode')
-                        continue
-
-                    with data_lock:
-                        manual_track_busy = tracker_capture_in_progress
-                    if manual_track_busy:
-                        add_message('Camera module busy')
-                        continue
-
-                    target_icao = selected_plane_icao if (selected_plane_icao in displayed_planes_snapshot) else None
-                    if not target_icao:
-                        min_track_dist = float("inf")
-                        for icao, display_data in displayed_planes_snapshot.items():
-                            plane = display_data.get("plane_data", {})
-                            if not plane_matches_altitude_filter(plane, altitude_filter_threshold, altitude_filter_above):
-                                continue
-                            lat = plane.get("last_lat")
-                            lon = plane.get("last_lon")
-                            if lat is None or lon is None:
-                                continue
-                            dist = functions.calculate_distance(view_center_lat, view_center_lon, float(lat), float(lon))
-                            if distance_filter_threshold_km > 0:
-                                if distance_filter_outside and dist < distance_filter_threshold_km:
-                                    continue
-                                if not distance_filter_outside and dist > distance_filter_threshold_km:
-                                    continue
-                            if dist < min_track_dist:
-                                min_track_dist = dist
-                                target_icao = icao
-                    if target_icao:
-                        begin_camera_tracking(target_icao, logger=add_message, auto_select=False)
-                    else:
-                        add_message("No target plane available for tracking")
-                    continue
-
-                elif zoom_in_ctrl_rect.collidepoint(mouse_x, mouse_y):
+                if zoom_in_ctrl_rect.collidepoint(mouse_x, mouse_y):
                     range_km = _zoom_in_range(range_km)
 
                 elif zoom_out_ctrl_rect.collidepoint(mouse_x, mouse_y):
@@ -243,13 +192,6 @@ def handle_events():
                     if runtime_mode == "production":
                         functions.save_config(_config)
                     add_message(f"Switched to {'offline' if offline else 'online'} mode")
-
-                elif auto_track_mode_rect.collidepoint(mouse_x, mouse_y):
-                    tracking_mode_auto = not tracking_mode_auto
-                    auto_track_queue.clear()
-                    auto_track_inside_icaos.clear()
-                    add_message(f"Switched to {'auto' if tracking_mode_auto else 'manual'} camera tracking")
-                    continue
 
                 elif screenshot_button_rect.collidepoint(mouse_x, mouse_y):
                     screenshots_dir = PROJECT_ROOT / "screenshots"

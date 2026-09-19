@@ -60,8 +60,6 @@ def adsb_processing_thread():
                         if "last_lat" in cached:
                             plane_data["prev_lat"] = cached["last_lat"]
                             plane_data["prev_lon"] = cached["last_lon"]
-                            plane_data["prev_update_time"] = cached.get("last_update_time")
-                            plane_data["prev_altitude"] = cached.get("altitude")
 
 
                         plane_data["location_history"] = cached.get("location_history", {})
@@ -196,9 +194,6 @@ def adsb_processing_thread():
             ]
             for icao in stale_active_planes:
                 del active_planes[icao]
-                tracker_plane_photo_cache.pop(icao, None)
-                tracker_plane_photo_meta_cache.pop(icao, None)
-                planecam_auto_capture_last_time.pop(icao, None)
 
         if flight_history_future is not None and flight_history_future.done():
             _fh_error = flight_history_future.exception()

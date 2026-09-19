@@ -1,7 +1,6 @@
 def prepare_frame():
         global aircraft_stat_availability, aircraft_stat_checkbox_rects
         global altitude_slider_down_rect, altitude_slider_up_rect
-        global cam_scroll_left_rect, cam_scroll_right_rect
         global cpu_percentage, cpu_temp, current_graph_date, current_time, disk_free
         global displayed_planes_snapshot, distance_filter_checkbox_rect
         global distance_filter_slider_handle_rect, distance_slider_down_rect
@@ -10,7 +9,7 @@ def prepare_frame():
         global hide_planes_button_rect, last_health_log, last_system_stats_refresh
         global log_bottom_row_y, log_box_rect, log_h_early, logs_h, logs_y
         global rarity_checkbox_rects, ram_percentage, reset_filters_button_rect
-        global slider_track_rect, top_graph_last_bucket, track_plane_button_rect
+        global slider_track_rect, top_graph_last_bucket
         global trajectory_toggle_rect
 
         current_time = time.time()
@@ -24,9 +23,7 @@ def prepare_frame():
             clear_top_graph_history(TOP_GRAPH_HISTORY_DIR)
             top_graph_last_bucket = None
 
-        pic_y = 377
-        pic_h = 203
-        logs_y = pic_y + pic_h + 10
+        logs_y = 590
         logs_h = (height - 50) - logs_y - 10
         filter_panel_rect = pygame.Rect(SIDEBAR_X + (SIDEBAR_WIDTH // 2) + 5, (315 // 2) + 68 + 150, int(SIDEBAR_WIDTH / 2) - 5, int(logs_h // 2))
         log_bottom_row_y = filter_panel_rect.bottom + 10
@@ -44,7 +41,6 @@ def prepare_frame():
         slider_track_rect = pygame.Rect(filter_panel_rect.left + 28, filter_panel_rect.top + 48, 12, max(80, filter_panel_rect.height - 66))
         distance_filter_checkbox_rect = pygame.Rect(filter_panel_rect.left + 83, filter_panel_rect.top + 10, 14, 14)
         distance_slider_track_rect = pygame.Rect(filter_panel_rect.left + 103, filter_panel_rect.top + 48, 12, max(80, filter_panel_rect.height - 66))
-        track_plane_button_rect = pygame.Rect(SIDEBAR_X + 250, ((315 // 2) + 68) + 10, 40, 40)
         slider_ratio = 1.0 - (altitude_filter_threshold / 50000.0)
         slider_handle_y = slider_track_rect.top + int(slider_ratio * slider_track_rect.height) - 5
         slider_handle_y = max(slider_track_rect.top - 5, min(slider_track_rect.bottom - 5, slider_handle_y))
@@ -72,10 +68,6 @@ def prepare_frame():
             for i, option in enumerate(AIRCRAFT_STAT_OPTIONS)
         }
 
-        _cam_box_w = int((SIDEBAR_WIDTH / 2) - 10)
-        _cam_box_h = int(_cam_box_w * 3 / 4)
-        cam_scroll_right_rect = pygame.Rect(SIDEBAR_X + 5 + _cam_box_w - btn_w, log_bottom_row_y + _cam_box_h + 10, btn_w, btn_h)
-        cam_scroll_left_rect = pygame.Rect(cam_scroll_right_rect.left - btn_w - btn_gap, log_bottom_row_y + _cam_box_h + 10, btn_w, btn_h)
 
 
         if current_time - last_health_log >= 1800:

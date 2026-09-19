@@ -85,24 +85,3 @@ def fetch_plane_info(icao):
 
 def upload_to_firebase(plane_data):
     pass
-
-
-def send_to_tracker(lat, lon, alt_ft, add_message=None, host='192.168.0.157', port=12345):
-    try:
-        alt_m = alt_ft * 0.3048
-        if add_message:
-            add_message('Sending position data to camera module')
-
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
-        sock.connect((host, port))
-        message = f"{lat},{lon},{alt_m}"
-        sock.send(message.encode())
-        response = sock.recv(1024).decode().strip()
-        sock.close()
-
-        if add_message:
-            add_message(f"Camera module response: {response or 'no response'}")
-    except Exception as e:
-        if add_message:
-            add_message(f"Camera module error: {e}")

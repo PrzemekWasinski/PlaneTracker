@@ -1,12 +1,10 @@
 def draw_radar():
-        global camera_scroll_offset, closest_plane, displayed_count
+        global closest_plane, displayed_count
         global displayed_planes_snapshot, target_icao
         global plane_rects, selected_plane_icao, view_center_lat, view_center_lon
-        global _prev_target_icao_for_scroll
 
         displayed_planes_snapshot = snapshot_displayed_planes()
 
-        refresh_tracker_photo_surface()
 
         if follow_selected_plane:
             followed_position = _active_plane_position(
@@ -65,12 +63,6 @@ def draw_radar():
             label_text = str(round(label_value)) if label_value is not None else '-'
             draw_text.normal(window, label_text, text_font3, (225, 225, 225), int(label_x), int(label_y))
 
-        auto_track_rect = build_auto_track_rect(range_km, view_center_lat, view_center_lon, _config['myLat'])
-        if auto_track_rect is not None:
-            rect_colour = (0, 255, 0) if tracking_mode_auto else (100, 100, 100)
-            pygame.draw.rect(window, rect_colour, auto_track_rect, 1)
-
-
         pygame.draw.polygon(window, (0, 255, 255), [
             (home_x, home_y - 3),
             (home_x + 3, home_y),
@@ -124,7 +116,6 @@ def draw_radar():
 
 
         current_plane_rects = {}
-        current_auto_track_icaos = set()
         target_icao = selected_plane_icao if (selected_plane_icao in displayed_planes_snapshot) else closest_plane
 
         for icao, display_data in displayed_planes_snapshot.items():
@@ -173,8 +164,6 @@ def draw_radar():
                     else:
                         heading = plane_headings.get(icao, 0.0)
 
-                if tracking_mode_auto and auto_track_rect is not None and auto_track_rect.collidepoint(int(x), int(y)):
-                    current_auto_track_icaos.add(icao)
 
                 rating = get_rarity_rating(plane.get('model', '-'), model_ratings)
                 rarity_col = get_rarity_colour(rating)
@@ -271,45 +260,3 @@ def draw_radar():
 
         with data_lock:
             plane_rects = current_plane_rects
-
-        if tracking_mode_auto:
-            new_auto_track_icaos = current_auto_track_icaos - auto_track_inside_icaos
-            for icao in sorted(new_auto_track_icaos):
-                if icao not in auto_track_queue:
-                    auto_track_queue.append(icao)
-            auto_track_inside_icaos.clear()
-            auto_track_inside_icaos.update(current_auto_track_icaos)
-
-            with data_lock:
-                camera_busy_for_auto = tracker_capture_in_progress
-            if not camera_busy_for_auto:
-                while auto_track_queue:
-                    queued_icao = auto_track_queue.popleft()
-                    if begin_camera_tracking(queued_icao, logger=add_message, auto_select=True):
-                        planecam_auto_capture_last_time[queued_icao] = current_time
-                        break
-        else:
-            auto_track_queue.clear()
-            auto_track_inside_icaos.clear()
-
-
-
-
-        if tracking_mode_auto and current_auto_track_icaos:
-            with data_lock:
-                _ac_busy = tracker_capture_in_progress
-            if not _ac_busy:
-                _ac_candidates = [
-                    icao for icao in current_auto_track_icaos
-                    if current_time - planecam_auto_capture_last_time.get(icao, 0.0) >= PLANECAM_AUTO_CAPTURE_INTERVAL
-                ]
-                if _ac_candidates:
-                    _ac_target = min(_ac_candidates, key=lambda icao: planecam_auto_capture_last_time.get(icao, 0.0))
-                    if begin_camera_tracking(_ac_target, logger=add_message, auto_select=True):
-                        planecam_auto_capture_last_time[_ac_target] = current_time
-
-
-        _scroll_target_icao = selected_plane_icao if selected_plane_icao else closest_plane
-        if _scroll_target_icao != _prev_target_icao_for_scroll:
-            camera_scroll_offset = 0
-            _prev_target_icao_for_scroll = _scroll_target_icao

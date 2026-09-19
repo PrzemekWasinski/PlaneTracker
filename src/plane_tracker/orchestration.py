@@ -6,8 +6,6 @@ def start_background_services():
     _background_services_started = True
     for target in (
         adsb_processing_thread,
-        tracker_stats_thread,
-        tracker_ping_thread,
         flight_stats_refresh_thread,
     ):
         threading.Thread(target=target, daemon=True).start()
