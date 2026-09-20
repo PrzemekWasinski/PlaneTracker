@@ -5,8 +5,6 @@ import time
 import logging
 import logging.handlers
 from datetime import datetime
-import pygame
-from pygame.locals import *
 from time import localtime, strftime
 import psutil
 import os
@@ -49,12 +47,8 @@ log.addHandler(_log_handler)
 
 from . import legacy_functions as functions
 from .adsb import processor
-from .aircraft import airports as airport_db
 from .aircraft.rarity import build_model_counts, compute_ratings, get_rarity_colour, get_rarity_rating
 from .core.compatibility import bind_module
-from .gui.legacy import text as draw_text
-from .gui.legacy.widgets import draw_altitude_filter, draw_filter_action_buttons, draw_line_graph, draw_polar_coverage_plot, draw_rarity_filter, plane_matches_altitude_filter, plane_matches_distance_filter
-from .gui import preview_data
 from .history.csv_storage import save_flight_history, save_plane_to_csv
 from .history import runtime as history_runtime
 from .history.samples import append_directional_hit, append_sample, clear_top_graph_history, load_top_graph_history, persist_top_graph_sample, prune_history
@@ -284,5 +278,9 @@ def snapshot_displayed_planes():
         }
 
 
-for _module in (aircraft_api, processor, history_runtime, preview_data, orchestration):
+for _module in (aircraft_api, processor, history_runtime, orchestration):
     bind_module(globals(), _module)
+
+
+if __name__ == "__main__":
+    main()

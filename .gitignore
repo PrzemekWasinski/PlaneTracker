@@ -27,3 +27,12 @@ textures/
 
 #TODO
 TODO.md
+
+#Frontend dependencies and generated output
+node_modules/
+dist/
+test-results/
+playwright-report/
+
+#Additional virtual environments
+.venv/

@@ -29,7 +29,6 @@ After the signals are decoded, processing is handled by the `plane_tracker` pack
 
 # Tech Stack
     Language: Python
-    Radar GUI: Pygame
+    Radar GUI: React + MapLibre (web)
     Computer: Dell OptiPlex 3050 SFF running Debian 13
     Receiver: RTL-SDR BLOG V4 & 60cm 1090MHz radio antenna
-

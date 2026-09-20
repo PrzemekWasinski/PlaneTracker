@@ -45,14 +45,10 @@ def upload_daily_stats(stats):
     })
 
 
-def main():
-    from .gui.legacy import window as gui
+def main(argv=None):
+    from .web.__main__ import main as run_web
 
-    if IS_WINDOWS:
-        gui.run(mode="preview")
-        return
-    initialise_firebase()
-    gui.run(mode="production", stats_uploader=upload_daily_stats)
+    return run_web(argv)
 
 
 if __name__ == "__main__":
