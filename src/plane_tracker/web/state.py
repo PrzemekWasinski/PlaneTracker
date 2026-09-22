@@ -66,6 +66,8 @@ class LiveState:
         self.metadata_thread = None
         self.lookup_after = {}
         self.api_pause_until = 0
+        self.api_available = False
+        self.firebase_available = False
         self.position_samples = {}
         self.series = deque(maxlen=1440)
         self.observed_hours = set()
@@ -324,6 +326,7 @@ class LiveState:
             self.lookup_after[icao] = now + 60
         result = fetch_plane_info(icao)
         with self.lock:
+            self.api_available = result is None or not result.get('last_api_error')
             if result is None:
                 self.lookup_after[icao] = now + 86400
                 return
@@ -354,6 +357,7 @@ class LiveState:
                 self._metadata_once()
             except Exception:
                 with self.lock:
+                    self.api_available = False
                     self._event('Aircraft metadata lookup unavailable', 'warning')
             self.stop_event.wait(1)
 
@@ -443,7 +447,8 @@ class LiveState:
                              "home": {"lat": self.home[0], "lon": self.home[1]},
                              "hitRate": self.message_rate if status == "live" else None},
                 "aircraft": planes, "stats": {**self._summary(),
-                    "metadataEnabled": self.metadata_enabled},
+                    "metadataEnabled": self.metadata_enabled, "apiAvailable": self.metadata_enabled and self.api_available,
+                    "firebaseAvailable": self.firebase_available},
                 "polar": self._polar(now), "history": list(self.series),
                 "nearbyHourly": self._nearby_hourly(),
                 "system": dict(self.system), "logs": list(self.events),

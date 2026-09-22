@@ -42,3 +42,14 @@ main{grid-template-columns:minmax(0,1fr) 275px 275px;grid-template-rows:180px 28
 .empty-graph .y-axis-label{font:9px monospace;text-anchor:end;font-variant-numeric:tabular-nums}
 
 .health{grid-template-columns:repeat(4,minmax(0,1fr)) max-content}.health dt{white-space:nowrap}.health>div:last-child dt{font-size:9px}
+
+.health dd{font-size:11px;line-height:1.4;font-weight:400}.health dt{line-height:14px}
+
+.statistics{grid-template-rows:32px 84px 1fr}.statistics .stats-grid{grid-column:2;grid-row:2/4;grid-template-rows:repeat(3,minmax(0,1fr));gap:8px;padding:10px 12px 10px 0}.statistics .stats-grid>div{min-width:0}.statistics .stats-grid dt{font-size:10px}.statistics .stats-grid dd{overflow:hidden;text-overflow:ellipsis;font-size:11px}.service-status{grid-column:1;grid-row:3;display:flex;align-items:center;justify-content:space-around;gap:12px;margin:0 0 10px 12px}.service-status span{display:flex;align-items:center;gap:6px;font-size:11px}.service-status i{width:7px;height:7px;border-radius:50%;background:#e05252}.service-status i.active{background:#38c94b}.statistics .history-error{grid-column:1/-1}
+@media(max-width:600px){.statistics{height:330px;grid-template-rows:32px 78px 30px 1fr}.statistics .service-status{grid-column:1;grid-row:3;margin:0 12px}.statistics .stats-grid{grid-column:1;grid-row:4;padding:10px 12px}.statistics .stats-grid dt{font-size:11px}.statistics .stats-grid dd{font-size:12px}}
+
+.statistics .big-stats>div{align-items:center;text-align:center}.statistics .service-status{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;justify-content:normal}.service-status span{justify-content:center;font-size:14px;gap:8px}.service-status i{width:10px;height:10px;flex:none}
+
+.statistics .service-status{row-gap:4px}.service-status span:last-child:nth-child(3){grid-column:1/-1}@media(max-width:600px){.statistics{height:350px;grid-template-rows:32px 78px 50px 1fr}}
+
+.statistics .service-status{grid-template-columns:1fr;justify-self:start;align-self:start;margin-top:0;row-gap:4px}.service-status span{justify-content:flex-start;font-size:12px;line-height:14px}.service-status span:last-child:nth-child(3){grid-column:1}.service-status i{width:8px;height:8px}@media(max-width:600px){.statistics{height:365px;grid-template-rows:32px 78px 65px 1fr}.statistics .service-status{margin-top:4px}}

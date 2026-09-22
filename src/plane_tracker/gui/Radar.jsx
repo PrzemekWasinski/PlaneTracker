@@ -80,11 +80,13 @@ export default function Radar({config,aircraft,selected,onSelect,follow,onFollow
   const target=aircraft.find(p=>p.icao===selected);
   if(follow&&target)map.easeTo({center:[target.lon,target.lat],duration:850});
  },[aircraft,selected,follow,trails,showLabels,ready]);
+ function centerHome(){onFollowChange(false);mapRef.current?.easeTo({center:[config.home.lon,config.home.lat],duration:600})}
  async function toggleFullscreen(){try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen()}catch{setFullscreen(false)}}
  return <section className="radar">
   <div className="map" ref={host} aria-label="Live radar map"/>
   <div className="map-top">
    <div className="map-status"><i className={connection==='live'?'live':'offline'}/><span>{connection==='live'?'Live':connection==='stale'?'Stale':connection==='disconnected'?'Disconnected':'No receiver'}</span><b>{aircraft.length}</b></div>
+   <button type="button" className="fullscreen-button" aria-label="Center on home" title="Center on home" onClick={centerHome}><Icon name="home"/></button>
    <button className="fullscreen-button" aria-label={fullscreen?"Exit fullscreen":"Fullscreen"} title="Fullscreen" onClick={toggleFullscreen}><Icon name="full"/></button>
   </div>
   {mapError&&<div className="map-error" role="status">Map unavailable</div>}

@@ -104,8 +104,8 @@ function App(){
   <aside className="left-column">
    <Panel name="Stats Today" className="statistics" action={<Clock/>}>
     <div className="big-stats"><div><label>Total aircraft</label><strong>{fmt(s.total)}</strong></div><div><label>Active</label><strong className="accent">{live?data.aircraft.length:'—'}</strong></div></div>
-    <dl className="stats-grid">{[['Airlines',fmt(s.airlines)],['Aircraft',fmt(s.models)],['Max Distance',distanceText(s.furthest)],['Max Altitude',fmt(s.highest,' ft')],['Max Speed',fmt(s.maxSpeed,' kt')],['Max Messages',fmt(s.maxHits)]].map(([k,v])=><div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>
-    <dl className="leaders">{[['Top Airline',s.topAirline],['Top Aircraft',s.topAircraft],['Top Manufacturer',s.topManufacturer]].map(([k,v])=><div key={k}><dt>{k}</dt><dd title={v||''}>{v||'—'}</dd></div>)}</dl>
+    <div className="service-status">{[['API',connected&&s.apiAvailable],['ADS-B Receiver',live],['Firebase',connected&&s.firebaseAvailable]].map(([name,active])=><span key={name} title={name==='API'?'Aircraft metadata API: last lookup result':name==='Firebase'?'Firebase: last upload result':'ADS-B receiver feed'} aria-label={`${name}: ${active?'active':'inactive'}`}><i className={active?'active':'inactive'} aria-hidden="true"/>{name}</span>)}</div>
+    <dl className="stats-grid">{[['Top Airline',s.topAirline||'?'],['Top Aircraft',s.topAircraft||'?'],['Top Manufacturer',s.topManufacturer||'?'],['Airlines',fmt(s.airlines)],['Aircraft',fmt(s.models)],['Max Distance',distanceText(s.furthest)],['Max Altitude',fmt(s.highest,' ft')],['Max Speed',fmt(s.maxSpeed,' kt')],['Max Messages',fmt(s.maxHits)]].map(([k,v])=><div key={k}><dt>{k}</dt><dd title={v}>{v}</dd></div>)}</dl>
 
     {s.historyError&&<span className="history-error">History unavailable</span>}
    </Panel>
@@ -120,7 +120,7 @@ function App(){
    <Panel name="Selected Aircraft" className="selected" action={<span className="hex" title={manualPlane?"Manual selection":"Auto: nearest aircraft"}>{manualPlane?"Manual":"Auto"}</span>}>
     <div className="aircraft-overview"><div className="identity"><div className="flight-identity"><strong>{plane?.callsign||'—'}</strong><span className="icao-code" title="ICAO aircraft code">{plane?.icao||'—'}</span></div><span>{plane?.airline||'—'}</span></div>
     </div><div className="model"><span>{modelName||'—'}</span><span>{plane?.registration||'—'}</span></div>
-    <dl className="flight-grid">{[['Altitude',fmt(plane?.altitude,' ft')],['Speed',fmt(plane?.speed,' kt')],['V/rate',fmt(plane?.verticalRate,' ft/min')],['Distance',distanceText(plane?.distanceKm)],['Squawk',plane?.squawk||'—'],['Messages',fmt(plane?.positionHits)]].map(([k,v])=><div key={k}><dt title={k==='Messages'?'Observed position updates today; deduplicated by position timestamp':undefined}>{k}</dt><dd>{v}</dd></div>)}</dl>
+    <dl className="flight-grid">{[['Altitude',fmt(plane?.altitude,' ft')],['Speed',fmt(plane?.speed,' kt')],['V/Rate',fmt(plane?.verticalRate,' ft/min')],['Distance',distanceText(plane?.distanceKm)],['Squawk',plane?.squawk||'—'],['Messages',fmt(plane?.positionHits)]].map(([k,v])=><div key={k}><dt title={k==='Messages'?'Observed position updates today; deduplicated by position timestamp':undefined}>{k}</dt><dd>{v}</dd></div>)}</dl>
     <button className={'follow '+(follow?'on':'')} disabled={!plane} onClick={()=>setFollow(!follow)}><Icon name="target"/>{follow?'Following':'Follow'}</button>
    </Panel>
    <Panel name="History" className="graphs"><div className="chart-grid">{[['Active Aircraft','active'],['Total','total'],['Selected Aircraft Altitude (ft)','altitude'],['Selected Aircraft Messages / Min','hits']].map(([name,field])=><HistoryGraph key={field} name={name} field={field} points={['altitude','hits'].includes(field)?(plane?.history||[]):(data.history||[])}/>)}</div></Panel>

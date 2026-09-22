@@ -69,6 +69,7 @@ class StatsUploader:
         # Retain unrelated fields already present at the existing daily node.
         db.reference(day, app=self.app).update(payload)
         with self.state.lock:
+            self.state.firebase_available = True
             self.state._event(f"Firebase updated: {payload['total_aircraft']} aircraft")
 
     def _run(self):
@@ -79,6 +80,7 @@ class StatsUploader:
                 except Exception as error:
                     # Avoid logging credential paths, secrets or SDK response bodies.
                     with self.state.lock:
+                        self.state.firebase_available = False
                         self.state._event(f'Firebase upload failed ({type(error).__name__}); retrying in 60s', 'warning')
                 self.stop_event.wait(60)
         finally:
