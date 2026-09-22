@@ -134,3 +134,33 @@ def test_aircraft_graphs_do_not_mix_targets(tmp_path):
     assert planes['ABC123']['history'][-1]['hits'] == 2
     assert planes['DEF456']['history'][-1]['altitude'] == 21000
     assert planes['DEF456']['history'][-1]['hits'] == 1
+
+
+def test_graphs_capture_changes_between_minute_samples(tmp_path):
+    s = state(tmp_path)
+    t = time.time()
+    ingest(s, t, plane(alt_baro=10000))
+    ingest(s, t+1, plane(alt_baro=10100), plane('DEF456', alt_baro=20000))
+    snap = s.snapshot(t+1)
+    assert [(p['active'], p['total']) for p in snap['history']] == [(1, 1), (2, 2)]
+    aircraft = {p['icao']: p for p in snap['aircraft']}
+    assert [p['altitude'] for p in aircraft['ABC123']['history']] == [10000, 10100]
+    ingest(s, t+2, plane(alt_baro=10100), plane('DEF456', alt_baro=20000))
+    assert len(s.snapshot(t+2)['history']) == 2
+    assert len(s.aircraft_history['ABC123']) == 3
+    ingest(s, t+33, plane(alt_baro=10200))
+    assert s.snapshot(t+33)['history'][-1]['active'] == 1
+    assert s.snapshot(t+33)['history'][-1]['total'] == 2
+    assert s.aircraft_history['ABC123'][-1]['altitude'] == 10200
+
+def test_polar_counts_only_new_positions_within_one_minute(tmp_path):
+    s = state(tmp_path)
+    t = time.time()
+    ingest(s, t, plane(messages=10000))
+    ingest(s, t+1, {**plane(messages=20000), 'seen_pos': 1})
+    assert s.snapshot(t+1)['polar']['total'] == 1
+    ingest(s, t+2, plane(messages=30000), plane('DEF456', lat=None, lon=None))
+    assert s.snapshot(t+2)['polar']['total'] == 2
+    assert s.snapshot(t+2)['polar']['windowSeconds'] == 60
+    assert s.snapshot(t+60)['polar']['total'] == 1
+    assert s.snapshot(t+62)['polar']['total'] == 0

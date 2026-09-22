@@ -265,11 +265,13 @@ class LiveState:
                 recent_hits = self.aircraft_hits.setdefault(icao, deque())
                 while recent_hits and timestamp-recent_hits[0] >= 60:
                     recent_hits.popleft()
-                samples = self.aircraft_history.setdefault(icao, deque(maxlen=60))
-                if not samples or timestamp-samples[-1]['timestamp'] >= 60:
+                samples = self.aircraft_history.setdefault(icao, deque(maxlen=3600))
+                while samples and timestamp - samples[0]['timestamp'] > 3600:
+                    samples.popleft()
+                if not samples or number(plane['altitude']) != samples[-1]['altitude'] or len(recent_hits) != samples[-1]['hits'] or timestamp-samples[-1]['timestamp'] >= 60:
                     samples.append({'timestamp': timestamp, 'altitude': number(plane['altitude']), 'hits': len(recent_hits)})
                 if icao not in self.daily and icao not in self.history:
-                    self._event(f"{text(plane['flight']) or icao} acquired", "new")
+                    self._event(f"{text(plane['flight']) or icao} detected", "new")
                 previous = self.daily.get(icao, self.history.get(icao, {}))
                 daily = {k: v for k, v in plane.items() if k != "trail"}
                 for key in ("altitude", "speed", "distance"):
@@ -287,10 +289,12 @@ class LiveState:
             self.aircraft_hits = {icao: hits for icao, hits in self.aircraft_hits.items() if icao in self.tracks}
             self.message_rate = round(hit_count / elapsed, 2) if elapsed and elapsed <= SOURCE_TTL else None
             self.polar_samples.append((timestamp, hit_bins))
-            while self.polar_samples and now - self.polar_samples[0][0] > 900:
+            while self.polar_samples and now - self.polar_samples[0][0] >= 60:
                 self.polar_samples.popleft()
-            if not self.series or timestamp - self.series[-1]['timestamp'] >= 60:
-                active = [p for p in self.tracks.values() if now-p['position_time'] <= POSITION_TTL]
+            active = [p for p in self.tracks.values() if now-p['position_time'] <= POSITION_TTL]
+            total = len(set(self.daily) | set(self.history))
+            if (not self.series or timestamp - self.series[-1]['timestamp'] >= 60
+                    or len(active) != self.series[-1]['active'] or total != self.series[-1]['total']):
                 self.series.append({'timestamp': timestamp, 'active': len(active),
                     'total': len(set(self.daily) | set(self.history)),
                     'altitude': max((number(p['altitude']) for p in active if number(p['altitude']) is not None), default=None),
@@ -298,10 +302,10 @@ class LiveState:
 
 
     def _polar(self, now):
-        while self.polar_samples and now - self.polar_samples[0][0] > 900:
+        while self.polar_samples and now - self.polar_samples[0][0] >= 60:
             self.polar_samples.popleft()
         bins = [sum(sample[1][i] for sample in self.polar_samples) for i in range(36)]
-        return {'bins': bins, 'sectorDegrees': 10, 'windowSeconds': 900, 'total': sum(bins)}
+        return {'bins': bins, 'sectorDegrees': 10, 'windowSeconds': 60, 'total': sum(bins)}
 
     def _metadata_once(self, now=None):
         now = time.time() if now is None else now

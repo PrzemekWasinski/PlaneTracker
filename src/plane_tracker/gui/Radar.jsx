@@ -5,15 +5,6 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 const empty={type:'FeatureCollection',features:[]};
 const planePath='M0 -16L3 -6L15 2L15 5L3 2L3 11L7 15L7 17L0 14L-7 17L-7 15L-3 11L-3 2L-15 5L-15 2L-3 -6Z';
 const blankStyle={version:8,sources:{},layers:[{id:'background',type:'background',paint:{'background-color':'#000000'}}]};
-function rings(home){
- const features=[];
- for(const km of [50,100,150,200]){
-  const radius=km/6371,lat=home.lat*Math.PI/180,lon=home.lon*Math.PI/180,points=[];
-  for(let i=0;i<=180;i++){const angle=i*Math.PI/90;const y=Math.asin(Math.sin(lat)*Math.cos(radius)+Math.cos(lat)*Math.sin(radius)*Math.cos(angle));const x=lon+Math.atan2(Math.sin(angle)*Math.sin(radius)*Math.cos(lat),Math.cos(radius)-Math.sin(lat)*Math.sin(y));points.push([x*180/Math.PI,y*180/Math.PI]);}
-  features.push({type:'Feature',geometry:{type:'LineString',coordinates:points},properties:{}});
- }
- return {type:'FeatureCollection',features};
-}
 export function Icon({name}){
  const paths={plus:'M12 5v14M5 12h14',minus:'M5 12h14',home:'m3 11 9-8 9 8M5 10v11h14V10M9 21v-7h6v7',full:'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5',target:'M12 2v4m0 12v4M2 12h4m12 0h4M18 12a6 6 0 1 1-12 0 6 6 0 0 1 12 0',search:'M16 16l5 5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0'};
  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]}/></svg>;
@@ -37,8 +28,6 @@ export default function Radar({config,aircraft,selected,onSelect,follow,onFollow
   const addLayers=()=>{
    if(!map.getSource('trails'))map.addSource('trails',{type:'geojson',data:empty});
    if(!map.getLayer('trails'))map.addLayer({id:'trails',type:'line',source:'trails',paint:{'line-color':['case',['==',['get','selected'],true],'#ffffff','#38c94b'],'line-width':['case',['==',['get','selected'],true],2.5,1.3],'line-opacity':['case',['==',['get','selected'],true],.85,.36]}});
-   if(!map.getSource('range'))map.addSource('range',{type:'geojson',data:rings(config.home)});
-   if(!map.getLayer('range'))map.addLayer({id:'range',type:'line',source:'range',paint:{'line-color':'#666666','line-width':1,'line-opacity':.45}});
    setReady(v=>v+1);
   };
   map.on('style.load',addLayers);
@@ -68,15 +57,22 @@ export default function Radar({config,aircraft,selected,onSelect,follow,onFollow
     const icon=document.createElementNS('http://www.w3.org/2000/svg','svg');icon.setAttribute('viewBox','-20 -20 40 40');
     const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',planePath);icon.append(path);
     const label=document.createElement('span');label.className='aircraft-label';
-    const call=document.createElement('strong'),alt=document.createElement('small');label.append(call,alt);element.append(icon,label);
+    const call=document.createElement('strong'),airline=document.createElement('small'),model=document.createElement('small'),alt=document.createElement('small');label.append(call,airline,model,alt);element.append(icon,label);
     element.addEventListener('click',e=>{e.stopPropagation();current.current.onSelect(p.icao)});
     const marker=new maplibregl.Marker({element,anchor:'center'}).setLngLat([p.lon,p.lat]).addTo(map);
-    item={marker,element,icon,label,call,alt};markers.current.set(p.icao,item);
+    item={marker,element,icon,label,call,airline,model,alt};markers.current.set(p.icao,item);
    }
    item.marker.setLngLat([p.lon,p.lat]);item.element.classList.toggle('selected',p.icao===selected);
-   item.element.setAttribute('aria-label','Select '+p.callsign);item.element.title=p.callsign;
+   const known=value=>typeof value==='string'&&!['','-','unknown','n/a'].includes(value.trim().toLowerCase())?value.trim():'';
+   const flight=known(p.callsign)||'Unknown';
+   const airline=known(p.airline)||'Unknown';
+   const manufacturer=known(p.manufacturer),model=known(p.model);
+   const modelName=(manufacturer&&!model.toLowerCase().startsWith(manufacturer.toLowerCase())?[manufacturer,model].filter(Boolean).join(' '):model)||'Unknown';
+   const altitude=Number.isFinite(p.altitude)?p.altitude.toLocaleString('en-GB',{maximumFractionDigits:0})+' ft':'Unknown';
+   item.element.setAttribute('aria-label',`Select ${flight}, ${airline}, ${modelName}, altitude ${altitude}`);
+   item.element.title=`${flight}\n${airline}\n${modelName}\n${altitude}`;
    item.icon.style.transform='rotate('+(p.heading??0)+'deg)';
-   item.call.textContent=p.callsign;item.alt.textContent=p.altitude===null?'—':(p.altitude/1000).toFixed(1)+'k ft';
+   item.call.textContent=flight;item.airline.textContent=airline;item.model.textContent=modelName;item.alt.textContent=altitude;
    item.label.hidden=!showLabels;
   }
   const source=map.getSource('trails');
