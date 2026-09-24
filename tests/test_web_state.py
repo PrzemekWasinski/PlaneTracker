@@ -164,3 +164,28 @@ def test_polar_counts_only_new_positions_within_one_minute(tmp_path):
     assert s.snapshot(t+2)['polar']['windowSeconds'] == 60
     assert s.snapshot(t+60)['polar']['total'] == 1
     assert s.snapshot(t+62)['polar']['total'] == 0
+
+
+def test_metadata_retries_unknown_and_partial_results_fairly(tmp_path):
+    s = state(tmp_path)
+    t = time.time()
+    s.metadata['ABC123'] = dict(manufacturer='Unknown', model='Unknown', owner='N/A', registration='null')
+    ingest(s, t, plane(), plane('DEF456'))
+    with patch('plane_tracker.web.state.fetch_plane_info', return_value={'last_api_error': t}) as fetch:
+        s._metadata_once(t)
+        assert fetch.call_args.args == ('ABC123',)
+    ingest(s, t+61, plane(), plane('DEF456'))
+    with patch('plane_tracker.web.state.fetch_plane_info', return_value={'manufacturer': 'Airbus'}) as fetch:
+        s._metadata_once(t+61)
+        assert fetch.call_args.args == ('DEF456',)
+    assert s.lookup_after['DEF456'] == t+361
+    with patch('plane_tracker.web.state.fetch_plane_info', return_value=None):
+        s._metadata_once(t+62)
+    assert s.lookup_after['ABC123'] == t+362
+    ingest(s, t+363, plane(), plane('DEF456'))
+    details = dict(manufacturer='Airbus', model='A320', owner='Example Air', registration='G-TEST')
+    with patch('plane_tracker.web.state.fetch_plane_info', return_value=details):
+        s._metadata_once(t+363)
+        s._metadata_once(t+364)
+    assert s.snapshot(t+364)['stats']['unknownOperators'] == 0
+    assert s.snapshot(t+364)['stats']['unknownModels'] == 0

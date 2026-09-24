@@ -33,7 +33,7 @@ def number(value):
 
 
 def text(value):
-    if value is None or str(value).strip().lower() in {"", "-", "none", "nan"}:
+    if value is None or str(value).strip().lower() in {"", "-", "none", "nan", "unknown", "n/a", "null"}:
         return None
     return str(value).strip()
 
@@ -318,17 +318,17 @@ class LiveState:
                           if now - plane['position_time'] <= POSITION_TTL
                           and re.fullmatch(r'[0-9A-F]{6}', icao)
                           and self.lookup_after.get(icao, 0) <= now
-                          and any(not text(self.metadata.get(icao, {}).get(k) or plane.get(k))
+                          and any(not (text(self.metadata.get(icao, {}).get(k)) or text(plane.get(k)))
                                   for k in ('model', 'owner', 'manufacturer', 'registration'))]
             if not candidates:
                 return
-            icao = candidates[0]
+            icao = min(candidates, key=lambda code: self.lookup_after.get(code, 0))
             self.lookup_after[icao] = now + 60
         result = fetch_plane_info(icao)
         with self.lock:
             self.api_available = result is None or not result.get('last_api_error')
             if result is None:
-                self.lookup_after[icao] = now + 86400
+                self.lookup_after[icao] = now + 300
                 return
             if result.get('last_api_error'):
                 self.api_pause_until = now + 60
@@ -339,7 +339,8 @@ class LiveState:
             for store in (self.tracks, self.daily, self.history):
                 if icao in store:
                     store[icao].update(fields)
-            self.lookup_after[icao] = now + 86400
+            complete = all(text(self.metadata[icao].get(k)) for k in ('manufacturer', 'model', 'owner', 'registration'))
+            self.lookup_after[icao] = now + (86400 if complete else 300)
             cache = dict(self.metadata)
         try:
             self.metadata_path.parent.mkdir(parents=True, exist_ok=True)

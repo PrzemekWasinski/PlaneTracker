@@ -13,6 +13,7 @@ function HistoryGraph({name,field,points}){
  const x=p=>38+212*(p.timestamp-start)/Math.max(60,end-start),y=p=>78-64*p[field]/max;
  const segments=[];let current=[];
  for(const p of points){if(!Number.isFinite(p[field])||(current.length&&p.timestamp-current.at(-1).timestamp>(field==='nearby'?3700:90))){if(current.length)segments.push(current);current=[]}if(Number.isFinite(p[field]))current.push(p)}if(current.length)segments.push(current);
+ if(field==='altitude'){segments.length=0;if(values.length)segments.push(values)}
  const stamp=t=>new Date(t*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
  return <div className="empty-graph"><span>{name}</span><svg viewBox="0 0 260 100" role="img" aria-label={name+' history'}>
  {[14,46,78].map(y=><line key={y} x1="50" x2="250" y1={y} y2={y}/>)}<text className="y-axis-label" x="30" y="17" textAnchor="end">{Math.round(max)}</text><text className="y-axis-label" x="30" y="80" textAnchor="end">0</text>
