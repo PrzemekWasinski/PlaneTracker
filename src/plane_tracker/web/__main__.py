@@ -1,4 +1,5 @@
 """Serve the live web UI and a read-only, same-origin snapshot API."""
+
 import argparse
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +15,7 @@ import yaml
 
 from .state import LiveState, number
 from .firebase import StatsUploader
+from .storage import PostgresStore
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -40,8 +42,9 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/state":
             return self._json(self.state.snapshot())
         if path == "/api/config":
-            return self._json({"mapStyle": self.state.map_style, "home": {
-                "lat": self.state.home[0], "lon": self.state.home[1]}})
+            return self._json(
+                {"mapStyle": self.state.map_style, "home": {"lat": self.state.home[0], "lon": self.state.home[1]}}
+            )
         if path.startswith("/api/"):
             return self.send_error(404)
         return super().do_GET()
@@ -69,7 +72,6 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=ROOT / "config/config.yml")
     parser.add_argument("--source", help="readsb aircraft.json local/shared path or HTTP(S) URL")
-    parser.add_argument("--history-dir", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--open", action="store_true")
@@ -85,25 +87,43 @@ def main(argv=None):
     lat, lon = number(config.get("myLat")), number(config.get("myLon"))
     if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
         parser.error("Set a valid myLat and myLon in config/config.yml")
-    source = args.source or os.environ.get("PLANE_TRACKER_READSB_SOURCE") or config.get("readsbUrl") or config.get("readsbJsonPath") or "/run/readsb/aircraft.json"
+    source = (
+        args.source
+        or os.environ.get("PLANE_TRACKER_READSB_SOURCE")
+        or config.get("readsbUrl")
+        or config.get("readsbJsonPath")
+        or "/run/readsb/aircraft.json"
+    )
     if not source.startswith(("http://", "https://")):
         source_path = Path(source)
         source = str(source_path if source_path.is_absolute() else ROOT / source_path)
-    history = args.history_dir or Path(config.get("flightHistoryDir", "./flight_history"))
-    if not history.is_absolute():
-        history = ROOT / history
     dist = ROOT / "src/plane_tracker/gui/dist"
     if not (dist / "index.html").exists():
         parser.error("Build the frontend first: cd src/plane_tracker/gui && npm ci && npm run build")
-    state = LiveState(source, (lat, lon), history, ROOT / "config/icao_cache.json",
-                      config.get("mapStyleUrl", "https://tiles.openfreemap.org/styles/dark"),
-                      metadata_enabled=not config.get("offlineMode", False))
+    dsn = (
+        os.environ.get("PLANE_TRACKER_DATABASE_URL")
+        or config.get("databaseDsn")
+        or "dbname=planetracker user=przemek host=/var/run/postgresql"
+    )
+    store = PostgresStore(dsn)
+    try:
+        state = LiveState(
+            source,
+            (lat, lon),
+            config.get("mapStyleUrl", "https://tiles.openfreemap.org/styles/dark"),
+            metadata_enabled=not config.get("offlineMode", False),
+            store=store,
+        )
+    except Exception as exc:
+        parser.error(
+            f"PostgreSQL startup failed ({type(exc).__name__}). Check the service, credentials and run scripts/setup_database.py. No tracking started."
+        )
     server = ThreadingHTTPServer((args.host, args.port), partial(Handler, state=state, directory=str(dist)))
     server.daemon_threads = True
     state.start()
     uploader = None
-    if not config.get('offlineMode', False):
-        uploader = StatsUploader(state, ROOT / 'config/firebase.json')
+    if not config.get("offlineMode", False):
+        uploader = StatsUploader(state, ROOT / "config/firebase.json")
         uploader.start()
     url = f"http://{'127.0.0.1' if args.host == '0.0.0.0' else args.host}:{args.port}/"
     print(f"Web UI: {url}", flush=True)

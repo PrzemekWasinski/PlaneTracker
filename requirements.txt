@@ -6,3 +6,6 @@ PyYAML==6.0.3
 requests==2.34.2
 pytest>=9,<10
 ruff>=0.12,<1
+
+psycopg[binary]>=3.2,<4
+tzdata>=2025.1

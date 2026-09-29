@@ -9,8 +9,8 @@ const fmt=(v,suffix='',digits=0)=>v===null||v===undefined?'—':Number(v).toLoca
 function Panel({name,children,className='',action}){return <section className={'panel '+className}><header><h2>{name}</h2>{action}</header>{children}</section>}
 function HistoryGraph({name,field,points}){
  const values=points.filter(p=>Number.isFinite(p[field])), max=Math.max(1,...values.map(p=>p[field]));
- const start=points[0]?.timestamp||0,end=points.at(-1)?.timestamp||start;
- const x=p=>38+212*(p.timestamp-start)/Math.max(60,end-start),y=p=>78-64*p[field]/max;
+ const end=Date.now()/1000,start=end-86400;
+ const x=p=>38+212*(p.timestamp-start)/(end-start),y=p=>78-64*p[field]/max;
  const segments=[];let current=[];
  for(const p of points){if(!Number.isFinite(p[field])||(current.length&&p.timestamp-current.at(-1).timestamp>(field==='nearby'?3700:90))){if(current.length)segments.push(current);current=[]}if(Number.isFinite(p[field]))current.push(p)}if(current.length)segments.push(current);
  if(field==='altitude'){segments.length=0;if(values.length)segments.push(values)}
@@ -30,7 +30,7 @@ function SegmentDisplay({value}){
 function PolarPlot({data}){
  const bins=data?.bins||Array(36).fill(0),maximum=Math.max(1,...bins);
  const point=(angle,r)=>[100+Math.sin(angle*Math.PI/180)*r,100-Math.cos(angle*Math.PI/180)*r];
- return <figure className="polar-figure"><svg className="empty-polar" viewBox="0 0 200 200" role="img" aria-label="Position messages by bearing over the last minute">
+ return <figure className="polar-figure"><svg className="empty-polar" viewBox="0 0 200 200" role="img" aria-label="Position messages by bearing over the last 24 hours">
  {[.25,.5,.75,1].map(f=><g key={f}><circle cx="100" cy="100" r={f*80}/><text x="104" y={100-f*80+9}>{Math.ceil(maximum*f)}</text></g>)}
  {[0,45,90,135].map(a=><line key={a} x1="100" y1="20" x2="100" y2="180" transform={'rotate('+a+' 100 100)'}/>)}
  {bins.map((count,i)=>{const r=80*count/maximum,[x1,y1]=point(i*10-4.5,r),[x2,y2]=point(i*10+4.5,r);return count>0?<path className="polar-sector" key={i} d={`M100 100L${x1} ${y1}A${r} ${r} 0 0 1 ${x2} ${y2}Z`}><title>{i*10} degrees: {count.toLocaleString()} messages</title></path>:null})}
@@ -108,11 +108,11 @@ function App(){
     <div className="service-status">{[['API',connected&&s.apiAvailable],['ADS-B Receiver',live],['Firebase',connected&&s.firebaseAvailable]].map(([name,active])=><span key={name} title={name==='API'?'Aircraft metadata API: last lookup result':name==='Firebase'?'Firebase: last upload result':'ADS-B receiver feed'} aria-label={`${name}: ${active?'active':'inactive'}`}><i className={active?'active':'inactive'} aria-hidden="true"/>{name}</span>)}</div>
     <dl className="stats-grid">{[['Top Airline',s.topAirline||'?'],['Top Aircraft',s.topAircraft||'?'],['Top Manufacturer',s.topManufacturer||'?'],['Airlines',fmt(s.airlines)],['Aircraft',fmt(s.models)],['Max Distance',distanceText(s.furthest)],['Max Altitude',fmt(s.highest,' ft')],['Max Speed',fmt(s.maxSpeed,' kt')],['Max Messages',fmt(s.maxHits)]].map(([k,v])=><div key={k}><dt>{k}</dt><dd title={v}>{v}</dd></div>)}</dl>
 
-    {s.historyError&&<span className="history-error">History unavailable</span>}
+    {data.storage&&(!data.storage.available||data.storage.dropped>0)&&<span className="history-error">{data.storage.available?"Storage buffer overflow: some records were lost":"PostgreSQL unavailable: buffering data"}</span>}
    </Panel>
    <Panel name="Performance" className="receiver">
     <div className="receiver-body"><PolarPlot data={data.polar}/>
-    <dl className="health">{[['CPU',fmt(health.cpu,'%')],['RAM',fmt(health.memory,'%')],['Disk',fmt(health.diskUsed,'%')],['Temp',fmt(health.temperature,'\u00b0C')],['Messages / S',fmt(live?data.receiver.hitRate:null,'',1)]].map(([name,value])=><div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}</dl></div>
+    <dl className="health">{[['CPU',fmt(health.cpu,'%')],['RAM',fmt(health.memory,'%')],['Disk',fmt(health.diskUsed,'%')],['Temp',fmt(health.temperature,'\u00b0C')],['API Calls / 10 Min',fmt(connected?s.apiCalls10Min:null)]].map(([name,value])=><div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}</dl></div>
    </Panel>
    <LogPanel logs={data.logs}/>
   </aside>

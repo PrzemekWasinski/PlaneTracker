@@ -36,3 +36,6 @@ playwright-report/
 
 #Additional virtual environments
 .venv/
+
+# Isolated development checks
+.test-deps/

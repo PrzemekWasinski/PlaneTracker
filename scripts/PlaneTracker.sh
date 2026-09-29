@@ -18,9 +18,15 @@ trap 'printf "\nLaunch failed at line %s. See the error above.\n" "$LINENO" >&2'
 [[ -d "$PROJECT_DIR" ]] || fail "Project folder not found: $PROJECT_DIR"
 [[ -x "$PYTHON" ]] || fail "Python environment missing. Run: python3 -m venv '$PROJECT_DIR/venv'"
 cd "$PROJECT_DIR"
+# Optional local environment file; keep database secrets outside the repository.
+if [[ -f "$HOME/.config/planetracker/environment" ]]; then
+    set -a
+    source "$HOME/.config/planetracker/environment"
+    set +a
+fi
 
-if ! "$PYTHON" -c 'import yaml, psutil, requests, firebase_admin' >/dev/null 2>&1; then
-    fail "Install server dependencies: '$PYTHON' -m pip install PyYAML psutil requests firebase-admin"
+if ! "$PYTHON" -c 'import yaml, psutil, requests, firebase_admin, psycopg, zoneinfo' >/dev/null 2>&1; then
+    fail "Install server dependencies: '$PYTHON' -m pip install -r '$PROJECT_DIR/requirements.txt'"
 fi
 
 # Release this app's listening port before rebuilding and starting a new server.

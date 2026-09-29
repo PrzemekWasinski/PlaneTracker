@@ -53,3 +53,5 @@ main{grid-template-columns:minmax(0,1fr) 275px 275px;grid-template-rows:180px 28
 .statistics .service-status{row-gap:4px}.service-status span:last-child:nth-child(3){grid-column:1/-1}@media(max-width:600px){.statistics{height:350px;grid-template-rows:32px 78px 50px 1fr}}
 
 .statistics .service-status{grid-template-columns:1fr;justify-self:start;align-self:start;margin-top:0;row-gap:4px}.service-status span{justify-content:flex-start;font-size:12px;line-height:14px}.service-status span:last-child:nth-child(3){grid-column:1}.service-status i{width:8px;height:8px}@media(max-width:600px){.statistics{height:365px;grid-template-rows:32px 78px 65px 1fr}.statistics .service-status{margin-top:4px}}
+
+.health>div:last-child dt{font-size:8px;white-space:nowrap}
