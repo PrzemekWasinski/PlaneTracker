@@ -47,6 +47,16 @@ def chart_points(points, limit=1500):
     return result
 
 
+def aircraft_chart_points(points):
+    # Separate encounters before downsampling, whose retained points may be far apart.
+    values = list(points)
+    first = 0
+    for i in range(1, len(values)):
+        if values[i]["timestamp"] - values[i - 1]["timestamp"] > 90:
+            first = i
+    return chart_points(values[first:])
+
+
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 
 
@@ -87,8 +97,9 @@ def read_source(source):
 
 
 class LiveState:
-    def __init__(self, source, home, map_style, metadata_enabled=True, store=None):
+    def __init__(self, source, home, map_style, metadata_enabled=True, store=None, keep_history=True):
         self.store = store
+        self.keep_history = keep_history
         self.dirty = set()
         self.last_performance_save = 0
         self.metadata_enabled = metadata_enabled
@@ -103,6 +114,7 @@ class LiveState:
         self.observed_hours = set()
         self.aircraft_history = {}
         self.aircraft_hits = {}
+        self.message_samples = {}
         self.polar_samples = deque()
         self.polar_totals = [0] * 36
         self.last_polar_timestamp = None
@@ -207,7 +219,7 @@ class LiveState:
             recent.popleft()
         if timestamp >= now - HISTORY_SECONDS:
             self.aircraft_history.setdefault(icao, deque()).append(
-                {"timestamp": timestamp, "altitude": p.get("altitude"), "hits": len(recent)}
+                {"timestamp": timestamp, "altitude": number(p.get("altitude")), "hits": number(p.get("messageRate"))}
             )
             bins = [0] * 36
             if p.get("bearing") is not None:
@@ -234,6 +246,24 @@ class LiveState:
             if not samples:
                 del self.aircraft_history[icao]
                 self.aircraft_hits.pop(icao, None)
+                self.message_samples.pop(icao, None)
+
+    def _aircraft_message_rate(self, icao, timestamp, counter):
+        """Messages/min from receiver counter deltas, never from position counts."""
+        counter = number(counter)
+        samples = self.message_samples.setdefault(icao, deque())
+        if counter is None or counter < 0:
+            samples.clear()
+            return None
+        if samples and (timestamp - samples[-1][0] > SOURCE_TTL or counter < samples[-1][1]):
+            samples.clear()
+        if samples and timestamp <= samples[-1][0]:
+            return None
+        samples.append((timestamp, counter))
+        while len(samples) > 2 and samples[1][0] <= timestamp - 60:
+            samples.popleft()
+        elapsed = timestamp - samples[0][0]
+        return round((counter - samples[0][1]) * 60 / elapsed, 2) if elapsed > 0 else None
 
     def _record_sample(self, timestamp, active, status):
         total = len(set(self.daily) | set(self.history))
@@ -349,11 +379,12 @@ class LiveState:
                 while trail and now - trail[0][0] > TRAIL_TTL:
                     trail.popleft()
                 plane["trail"] = trail
+                plane["messageRate"] = self._aircraft_message_rate(icao, timestamp, parsed.get("messages"))
                 plane["positionHits"] = hits
                 plane["lastPositionTime"] = self.position_samples.get(icao, position_time)
                 self.tracks[icao] = plane
                 self.dirty.add(icao)
-                if new_hit and self.store:
+                if new_hit and self.store and self.keep_history:
                     position = {
                         k: plane.get(k)
                         for k in (
@@ -368,6 +399,7 @@ class LiveState:
                             "squawk",
                             "distance",
                             "position_time",
+                            "messageRate",
                         )
                     }
                     for key in ("altitude", "speed", "track", "baro_rate"):
@@ -387,11 +419,11 @@ class LiveState:
                 if (
                     not samples
                     or number(plane["altitude"]) != samples[-1]["altitude"]
-                    or len(recent_hits) != samples[-1]["hits"]
+                    or plane["messageRate"] != samples[-1]["hits"]
                     or timestamp - samples[-1]["timestamp"] >= 60
                 ):
                     samples.append(
-                        {"timestamp": timestamp, "altitude": number(plane["altitude"]), "hits": len(recent_hits)}
+                        {"timestamp": timestamp, "altitude": number(plane["altitude"]), "hits": plane["messageRate"]}
                     )
                 if icao not in self.daily and icao not in self.history:
                     self._event(f"{text(plane['flight']) or icao} detected", "new")
@@ -435,16 +467,24 @@ class LiveState:
         for i, value in enumerate(bins):
             self.polar_totals[i] += value
 
-    def _polar(self, now):
+    def _polar(self, now, window_seconds=HISTORY_SECONDS):
         while self.polar_samples and now - self.polar_samples[0][0] >= HISTORY_SECONDS:
             _, bins = self.polar_samples.popleft()
             for i, value in enumerate(bins):
                 self.polar_totals[i] -= value
+        bins = list(self.polar_totals)
+        if window_seconds != HISTORY_SECONDS:
+            bins = [0] * 36
+            for timestamp, sample in reversed(self.polar_samples):
+                if now - timestamp >= window_seconds:
+                    break
+                for i, count in enumerate(sample):
+                    bins[i] += count
         return {
-            "bins": list(self.polar_totals),
+            "bins": bins,
             "sectorDegrees": 10,
-            "windowSeconds": HISTORY_SECONDS,
-            "total": sum(self.polar_totals),
+            "windowSeconds": window_seconds,
+            "total": sum(bins),
         }
 
     def _metadata_once(self, now=None):
@@ -599,7 +639,7 @@ class LiveState:
                             "registration": p["registration"],
                             "model": p["model"],
                             "airline": p["owner"],
-                            "history": chart_points(self.aircraft_history.get(icao, [])),
+                            "history": aircraft_chart_points(self.aircraft_history.get(icao, [])),
                             "manufacturer": p["manufacturer"],
                             "updatedAt": p["position_time"],
                             "trail": [[lon, lat] for ts, lon, lat in p["trail"] if now - ts <= TRAIL_TTL],
@@ -622,6 +662,7 @@ class LiveState:
                     "apiCalls10Min": len(self.api_calls),
                 },
                 "polar": self._polar(now),
+                "polarMinute": self._polar(now, 60),
                 "history": chart_points(self.series),
                 "nearbyHourly": self._nearby_hourly(),
                 "storage": self.store.status() if self.store else None,

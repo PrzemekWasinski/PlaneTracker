@@ -113,6 +113,7 @@ def main(argv=None):
             config.get("mapStyleUrl", "https://tiles.openfreemap.org/styles/dark"),
             metadata_enabled=not config.get("offlineMode", False),
             store=store,
+            keep_history=config.get("keep_history", True),
         )
     except Exception as exc:
         parser.error(
