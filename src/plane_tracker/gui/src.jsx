@@ -11,13 +11,15 @@ const fmt=(v,suffix='',digits=0)=>v===null||v===undefined?'—':Number(v).toLoca
 function Panel({name,children,className='',action}){return <section className={'panel '+className}><header><h2>{name}</h2>{action}</header>{children}</section>}
 function HistoryGraph({name,field,points}){
  const {points:values,segments,start,end,min,max}=historySeries(points,field);
- const x=p=>50+200*(p.timestamp-start)/(end-start),y=p=>78-64*(p[field]-min)/(max-min);
+ const topLabel=Math.round(max).toLocaleString('en-GB'),bottomLabel=Math.round(min).toLocaleString('en-GB');
+ const left=Math.max(60,20+6*Math.max(topLabel.length,bottomLabel.length));
+ const x=p=>left+(250-left)*(p.timestamp-start)/(end-start),y=p=>max===min?46:78-64*(p[field]-min)/(max-min);
  const stamp=t=>new Date(t*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
  return <div className="empty-graph"><span>{name}</span><svg viewBox="0 0 260 100" role="img" aria-label={name+' history'}>
- {[14,46,78].map(y=><line key={y} x1="50" x2="250" y1={y} y2={y}/>)}<text className="y-axis-label" x="30" y="17" textAnchor="end">{Math.round(max).toLocaleString('en-GB')}</text><text className="y-axis-label" x="30" y="80" textAnchor="end">{Math.round(min).toLocaleString('en-GB')}</text>
+ {[14,46,78].map(y=><line key={y} x1={left} x2="250" y1={y} y2={y}/>)}<text className="y-axis-label" x={left-10} y="17" textAnchor="end">{topLabel}</text><text className="y-axis-label" x={left-10} y="80" textAnchor="end">{bottomLabel}</text>
  {segments.map((segment,i)=><polyline className="history-line" key={i} points={segment.map(p=>`${x(p)},${y(p)}`).join(' ')}/>)}
  {(values.length===1?values:[]).map(p=><circle className="history-dot" key={p.timestamp} cx={x(p)} cy={y(p)} r="2"><title>{stamp(p.timestamp)}: {p[field]}</title></circle>)}
- {values.length>0?<><text x="50" y="97">{stamp(start)}</text><text x="250" y="97" textAnchor="end">{stamp(end)}</text></>:<text x="55" y="47">Collecting history</text>}
+ {values.length>0?<><text x={left} y="97">{stamp(start)}</text><text x="250" y="97" textAnchor="end">{stamp(end)}</text></>:<text x="55" y="47">Collecting history</text>}
  </svg></div>;
 }
 function SegmentDisplay({value}){

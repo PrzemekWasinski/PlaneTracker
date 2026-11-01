@@ -5,6 +5,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import json
 import math
+import os
 import re
 from pathlib import Path
 import threading
@@ -13,6 +14,7 @@ from urllib.request import Request, urlopen
 
 import psutil
 
+from .temperature import read_host_temperature
 from ..adsb.parser import parse_aircraft
 from ..core.geometry import calculate_distance, calculate_bearing
 from ..services.network import fetch_plane_info
@@ -48,13 +50,23 @@ def chart_points(points, limit=1500):
 
 
 def aircraft_chart_points(points):
-    # Separate encounters before downsampling, whose retained points may be far apart.
+    # Keep short reception outages in the same encounter. Insert silence before
+    # downsampling so retained samples cannot be mistaken for a reception gap.
     values = list(points)
     first = 0
     for i in range(1, len(values)):
-        if values[i]["timestamp"] - values[i - 1]["timestamp"] > 90:
+        if values[i]["timestamp"] - values[i - 1]["timestamp"] > TRAIL_TTL:
             first = i
-    return chart_points(values[first:])
+    result = []
+    for point in values[first:]:
+        if result and point["timestamp"] - result[-1]["timestamp"] > 90:
+            previous = result[-1]["timestamp"]
+            result.extend([
+                {"timestamp": previous + 60, "altitude": None, "hits": 0},
+                {"timestamp": point["timestamp"] - 0.001, "altitude": None, "hits": 0},
+            ])
+        result.append(point)
+    return chart_points(result)
 
 
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
@@ -684,6 +696,8 @@ class LiveState:
                     break
         except (AttributeError, OSError):
             pass
+        if os.environ.get("PLANE_TRACKER_TEMPERATURE_HOST"):
+            temperature = read_host_temperature()
         try:
             disk = psutil.disk_usage(str(Path.cwd().anchor))
             used = disk.percent

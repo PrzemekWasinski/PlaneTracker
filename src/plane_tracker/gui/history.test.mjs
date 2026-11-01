@@ -11,15 +11,16 @@ test('dashboard lines bridge shutdown gaps and missing samples',()=>{
 });
 test('selected charts preserve missing measurements instead of plotting zeros',()=>{
  const chart=historySeries([{timestamp:100,altitude:30000},{timestamp:110,altitude:null},{timestamp:120,altitude:30100}], 'altitude');
- assert.equal(chart.segments.length,2);
+ assert.equal(chart.segments.length,1);
  assert.equal(chart.points.length,2);
- assert.ok(chart.min<30000 && chart.min>29000);
- assert.ok(chart.max>30100);
+ assert.equal(chart.min,30000);
+ assert.equal(chart.max,30100);
 });
-test('flat, negative and empty altitude histories have finite nonzero scales',()=>{
+test('flat, negative and empty altitude histories have finite bounds',()=>{
  for(const points of [[],[{timestamp:10,altitude:35000}],[{timestamp:10,altitude:-200}]]){
   const chart=historySeries(points,'altitude');
-  assert.ok(chart.max>chart.min);
+  assert.ok(Number.isFinite(chart.min)&&Number.isFinite(chart.max));
+  assert.ok(chart.max>=chart.min);
   assert.ok(chart.end>chart.start);
  }
 });
@@ -34,4 +35,31 @@ test('clearing hides every graph through the cutoff and preserves subsequent sam
  assert.deepEqual(visibleHistory(points,200),[]);
  assert.deepEqual(visibleHistory([...points,{timestamp:201,active:2,total:9,altitude:3200,hits:90}],200).map(p=>p.timestamp),[201]);
  assert.equal(points.length,2);
+});
+
+test('altitude bounds follow exact new high and low readings without padding',()=>{
+ const points=[{timestamp:100,altitude:10000},{timestamp:110,altitude:9000}];
+ assert.equal(historySeries(points,'altitude').max,10000);
+ assert.equal(historySeries(points,'altitude').min,9000);
+ points.push({timestamp:120,altitude:8000});
+ assert.equal(historySeries(points,'altitude').min,8000);
+ assert.equal(historySeries(points,'altitude').max,10000);
+ points.push({timestamp:130,altitude:11000});
+ assert.equal(historySeries(points,'altitude').min,8000);
+ assert.equal(historySeries(points,'altitude').max,11000);
+ const flat=historySeries([{timestamp:100,altitude:35000}],'altitude');
+ assert.equal(flat.min,35000);assert.equal(flat.max,35000);
+});
+
+test('altitude time axis begins at the first valid altitude, ignoring leading unknowns',()=>{
+ const chart=historySeries([{timestamp:100,altitude:null},{timestamp:120,altitude:null},{timestamp:140,altitude:9000},{timestamp:200,altitude:8000}], 'altitude');
+ assert.equal(chart.start,140);
+ assert.equal(chart.points[0].timestamp,chart.start);
+ assert.equal(chart.segments.length,1);
+});
+test('message silence is zero and never breaks the line',()=>{
+ const chart=historySeries([{timestamp:100,hits:120},{timestamp:160,hits:0},{timestamp:220,hits:null},{timestamp:300,hits:90}], 'hits');
+ assert.equal(chart.segments.length,1);
+ assert.deepEqual(chart.points.map(p=>p.hits),[120,0,0,90]);
+ assert.equal(chart.start,100);
 });
